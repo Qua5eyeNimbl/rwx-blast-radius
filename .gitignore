@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+output.jsonl
+*.log
+.env
+.venv/
+coverage.json
+.coverage*
+cache/
