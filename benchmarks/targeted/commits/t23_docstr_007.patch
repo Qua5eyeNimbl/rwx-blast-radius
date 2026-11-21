@@ -1,0 +1,13 @@
+diff --git a/sqlglot/diff.py b/sqlglot/diff.py
+index 1111111..2222222 100644
+--- a/sqlglot/diff.py
++++ b/sqlglot/diff.py
+@@ -36,7 +36,7 @@
+ 
+ @dataclass(frozen=True)
+ class Move:
+-    """Indicates that an existing node's position within the tree has changed"""
++    """Note: Indicates that an existing node's position within the tree has changed"""
+ 
+     source: exp.Expr
+     target: exp.Expr

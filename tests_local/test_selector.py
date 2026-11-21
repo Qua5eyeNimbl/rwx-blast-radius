@@ -216,6 +216,18 @@ index 1111111..2222222 100644
         ids = self.ids(self.selector.for_patch(p))
         self.assertIn("tests/dialects/test_bigquery.py::TestBigQuery::test_convert", ids)
 
+    def test_sql_template_parsed_at_import_breaks_collection(self):
+        # DuckDBGenerator parses this SQL while importing; text that no longer
+        # parses fails every tests/dialects file at collection (generated
+        # patch t25_tmpl_000, label from the pinned suite).
+        lines = self.selector.index.sources()["sqlglot/generators/duckdb.py"].split("\n")
+        old = '"(ROW_NUMBER() OVER (ORDER BY 1) - 1)"'
+        k = next(i for i, ln in enumerate(lines) if old in ln)
+        p = mkpatch("sqlglot/generators/duckdb.py", k, [lines[k]], [lines[k].replace(old, '"(ROW_NUMBER() OVER (ORDER BY 1) - - 1))"')],
+                    [lines[k - 1]], [lines[k + 1]])
+        sel = self.selector.for_patch(p)
+        self.assertLessEqual(self.selector.by_file["tests/dialects/test_bigquery.py"], sel)
+
     def test_selected_numbers_are_valid(self):
         for patch in sorted((ROOT / "sample" / "commits").glob("*.patch")):
             with self.subTest(patch=patch.name):

@@ -1,0 +1,13 @@
+diff --git a/sqlglot/diff.py b/sqlglot/diff.py
+index 1111111..2222222 100644
+--- a/sqlglot/diff.py
++++ b/sqlglot/diff.py
+@@ -29,7 +29,7 @@
+ 
+ @dataclass(frozen=True)
+ class Remove:
+-    """Indicates that an existing node has been removed"""
++    """Note: Indicates that an existing node has been removed"""
+ 
+     expression: exp.Expr
+ 

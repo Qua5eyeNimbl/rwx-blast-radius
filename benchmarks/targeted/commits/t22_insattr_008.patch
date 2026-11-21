@@ -1,0 +1,12 @@
+diff --git a/sqlglot/dialects/sqlite.py b/sqlglot/dialects/sqlite.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/sqlite.py
++++ b/sqlglot/dialects/sqlite.py
+@@ -37,6 +37,7 @@
+     }
+ 
+     class Tokenizer(tokens.Tokenizer):
++        HEREDOC_TAG_IS_IDENTIFIER = True
+         IDENTIFIERS = ['"', ("[", "]"), "`"]
+         HEX_STRINGS = [("x'", "'"), ("X'", "'"), ("0x", ""), ("0X", "")]
+ 

@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parsers/athena.py b/sqlglot/parsers/athena.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/athena.py
++++ b/sqlglot/parsers/athena.py
+@@ -29,6 +29,7 @@
+ 
+ 
+ class AthenaParser(AthenaTrinoParser):
++    ALTER_TABLE_MIXED_ACTIONS = True
+     def __init__(
+         self,
+         error_level: ErrorLevel | None = None,

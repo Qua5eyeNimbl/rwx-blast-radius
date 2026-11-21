@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -4166,7 +4166,7 @@
+ 
+     def _parse_select_query(
+         self,
+-        nested: bool = False,
++        nested: bool = True,
+         table: bool = False,
+         parse_subquery_alias: bool = True,
+         parse_set_operation: bool = True,

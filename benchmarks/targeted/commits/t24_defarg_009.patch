@@ -1,0 +1,13 @@
+diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/dialect.py
++++ b/sqlglot/dialects/dialect.py
+@@ -2491,7 +2491,7 @@
+     expression: exp.Expr,
+     default: str = "DAY",
+     *,
+-    century_from_zero: bool = False,
++    century_from_zero: bool = True,
+ ) -> exp.Expr | None:
+     unit = expression.args.get("unit")
+     if isinstance(unit, exp.WeekStart):

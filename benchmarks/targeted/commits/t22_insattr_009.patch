@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/exasol.py b/sqlglot/generators/exasol.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/exasol.py
++++ b/sqlglot/generators/exasol.py
+@@ -266,6 +266,7 @@
+ 
+ 
+ class ExasolGenerator(generator.Generator):
++    IGNORE_NULLS_BEFORE_ORDER = False
+     SELECT_KINDS = ()
+     TRY_SUPPORTED = False
+     SUPPORTS_UESCAPE = False

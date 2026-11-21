@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parsers/presto.py b/sqlglot/parsers/presto.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/presto.py
++++ b/sqlglot/parsers/presto.py
+@@ -97,7 +97,6 @@
+ class PrestoParser(parser.Parser):
+     SUPPORTS_TABLE_QUERY = True
+ 
+-    VALUES_FOLLOWED_BY_PAREN = False
+     ZONE_AWARE_TIMESTAMP_CONSTRUCTOR = True
+     AT_TIME_ZONE_READS_SESSION_ZONE = True
+ 

@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -4168,7 +4168,7 @@
+         self,
+         nested: bool = False,
+         table: bool = False,
+-        parse_subquery_alias: bool = True,
++        parse_subquery_alias: bool = False,
+         parse_set_operation: bool = True,
+     ) -> exp.Expr | None:
+         cte = self._parse_with()

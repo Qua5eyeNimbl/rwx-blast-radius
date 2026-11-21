@@ -1,0 +1,12 @@
+diff --git a/sqlglot/expressions/core.py b/sqlglot/expressions/core.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/core.py
++++ b/sqlglot/expressions/core.py
+@@ -2072,7 +2072,6 @@
+         "Y": "YEAR",
+     }
+ 
+-    VAR_LIKE: t.ClassVar[tuple[Type[Expr], ...]] = (Column, Literal, Var)
+ 
+     def __init__(self, **args: object) -> None:
+         super().__init__(**args)

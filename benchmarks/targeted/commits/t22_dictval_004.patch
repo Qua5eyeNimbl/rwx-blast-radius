@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/duckdb.py
++++ b/sqlglot/generators/duckdb.py
+@@ -2103,7 +2103,7 @@
+         "WEEKISO": ("%V", "INTEGER"),
+         "YEAROFWEEK": ("%G", "INTEGER"),
+         "YEAROFWEEKISO": ("%G", "INTEGER"),
+-        "NANOSECOND": ("%n", "BIGINT"),
++        "NANOSECOND": ("%nq", "BIGINT"),
+     }
+ 
+     # Maps epoch-based specifiers to DuckDB epoch functions

@@ -1,0 +1,12 @@
+diff --git a/sqlglot/dialects/bigquery.py b/sqlglot/dialects/bigquery.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/bigquery.py
++++ b/sqlglot/dialects/bigquery.py
+@@ -23,7 +23,6 @@
+     WEEK_OFFSET = -1
+     UNNEST_COLUMN_ONLY = True
+     SUPPORTS_USER_DEFINED_TYPES = False
+-    LOG_BASE_FIRST = False
+     HEX_LOWERCASE = True
+     FORCE_EARLY_ALIAS_REF_EXPANSION = True
+     EXPAND_ONLY_GROUP_ALIAS_REF = True

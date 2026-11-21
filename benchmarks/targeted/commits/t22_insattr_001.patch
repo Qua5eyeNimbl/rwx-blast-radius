@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/singlestore.py b/sqlglot/generators/singlestore.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/singlestore.py
++++ b/sqlglot/generators/singlestore.py
+@@ -26,6 +26,7 @@
+ 
+ 
+ class SingleStoreGenerator(MySQLGenerator):
++    UPDATE_STATEMENT_SUPPORTS_FROM = False
+     SUPPORTS_UESCAPE = False
+     SUPPORTS_ALTER_COLUMN_NULLABILITY = False
+     NULL_ORDERING_SUPPORTED: bool | None = True

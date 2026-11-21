@@ -1,0 +1,12 @@
+diff --git a/sqlglot/dialects/drill.py b/sqlglot/dialects/drill.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/drill.py
++++ b/sqlglot/dialects/drill.py
+@@ -8,6 +8,7 @@
+ 
+ 
+ class Drill(Dialect):
++    SUPPORTS_POSITIONAL_COLUMN_REFS = True
+     NORMALIZE_FUNCTIONS: bool | str = False
+     ORIGINAL_NAME_META_KEY = "drill_name"
+     NULL_ORDERING = "nulls_are_last"

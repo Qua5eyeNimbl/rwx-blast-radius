@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/postgres.py b/sqlglot/generators/postgres.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/postgres.py
++++ b/sqlglot/generators/postgres.py
+@@ -273,7 +273,6 @@
+ 
+ 
+ class PostgresGenerator(generator.Generator):
+-    SELECT_KINDS = ()
+     VARIANCE_NAME = "VAR_SAMP"
+     TRY_SUPPORTED = False
+     SUPPORTS_DECODE_CASE = False

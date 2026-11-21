@@ -1,0 +1,12 @@
+diff --git a/sqlglot/expressions/dml.py b/sqlglot/expressions/dml.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/dml.py
++++ b/sqlglot/expressions/dml.py
+@@ -523,6 +523,6 @@
+ 
+ 
+ class Whens(Expression):
+-    """Wraps around one or more WHEN [NOT] MATCHED [...] clauses."""
++    """Note: Wraps around one or more WHEN [NOT] MATCHED [...] clauses."""
+ 
+     arg_types = {"expressions": True}

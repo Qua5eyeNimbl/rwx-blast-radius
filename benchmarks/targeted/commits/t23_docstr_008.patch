@@ -1,0 +1,13 @@
+diff --git a/sqlglot/expressions/core.py b/sqlglot/expressions/core.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/core.py
++++ b/sqlglot/expressions/core.py
+@@ -2057,7 +2057,7 @@
+ 
+ @trait
+ class TimeUnit(Expr):
+-    """Automatically converts unit arg into a var."""
++    """Note: Automatically converts unit arg into a var."""
+ 
+     UNABBREVIATED_UNIT_NAME: t.ClassVar[dict[str, str]] = {
+         "D": "DAY",

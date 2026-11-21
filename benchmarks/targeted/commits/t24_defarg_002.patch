@@ -1,0 +1,13 @@
+diff --git a/sqlglot/optimizer/merge_subqueries.py b/sqlglot/optimizer/merge_subqueries.py
+index 1111111..2222222 100644
+--- a/sqlglot/optimizer/merge_subqueries.py
++++ b/sqlglot/optimizer/merge_subqueries.py
+@@ -204,7 +204,7 @@
+ 
+ def merge_derived_tables(
+     expression: E,
+-    leave_tables_isolated: bool = False,
++    leave_tables_isolated: bool = True,
+     scopes: list[Scope] | None = None,
+     copy_budget: CopyBudget | None = None,
+ ) -> E:

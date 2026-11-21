@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parsers/hive.py b/sqlglot/parsers/hive.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/hive.py
++++ b/sqlglot/parsers/hive.py
+@@ -52,6 +52,7 @@
+ 
+ 
+ class HiveParser(parser.Parser):
++    INTERVAL_SPANS = False
+     IS_PREDICATE_PRECEDENCE = IsPredicatePrecedence.EQUALITY
+ 
+     LOG_DEFAULTS_TO_LN = True

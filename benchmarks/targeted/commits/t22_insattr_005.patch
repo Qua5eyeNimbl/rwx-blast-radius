@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/bigquery.py b/sqlglot/generators/bigquery.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/bigquery.py
++++ b/sqlglot/generators/bigquery.py
+@@ -337,6 +337,7 @@
+ 
+ 
+ class BigQueryGenerator(generator.Generator):
++    SUPPORTS_LIKE_QUANTIFIERS = False
+     TRY_SUPPORTED = False
+     SUPPORTS_UESCAPE = False
+     SUPPORTS_DECODE_CASE = False

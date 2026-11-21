@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -4496,7 +4496,7 @@
+         return table_alias
+ 
+     def _parse_subquery(
+-        self, this: exp.Expr | None, parse_alias: bool = True
++        self, this: exp.Expr | None, parse_alias: bool = False
+     ) -> exp.Subquery | None:
+         if not this:
+             return None

@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/oracle.py b/sqlglot/generators/oracle.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/oracle.py
++++ b/sqlglot/generators/oracle.py
+@@ -24,6 +24,7 @@
+ 
+ 
+ class OracleGenerator(generator.Generator):
++    EXCEPT_INTERSECT_SUPPORT_ALL_CLAUSE = False
+     SELECT_KINDS = ()
+     TRY_SUPPORTED = False
+     SUPPORTS_UESCAPE = False

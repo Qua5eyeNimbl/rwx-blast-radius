@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/duckdb.py
++++ b/sqlglot/generators/duckdb.py
+@@ -2111,7 +2111,7 @@
+         "EPOCH_SECOND": "EPOCH",
+         "EPOCH_MILLISECOND": "EPOCH_MS",
+         "EPOCH_MICROSECOND": "EPOCH_US",
+-        "EPOCH_NANOSECOND": "EPOCH_NS",
++        "EPOCH_NANOSECOND": "EPOCH_NSq",
+     }
+ 
+     # Template for BITMAP_CONSTRUCT_AGG transpilation

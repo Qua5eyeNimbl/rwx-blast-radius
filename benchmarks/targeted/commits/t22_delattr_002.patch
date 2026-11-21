@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parsers/clickhouse.py b/sqlglot/parsers/clickhouse.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/clickhouse.py
++++ b/sqlglot/parsers/clickhouse.py
+@@ -272,7 +272,6 @@
+     IS_PREDICATE_PRECEDENCE = IsPredicatePrecedence.LOW
+ 
+     SET_OP_MODIFIERS = {"settings", "format"}
+-    INTERVAL_SPANS = False
+     OPTIONAL_ALIAS_TOKEN_CTE = False
+     JOINS_HAVE_EQUAL_PRECEDENCE = True
+ 

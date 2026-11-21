@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/starrocks.py b/sqlglot/generators/starrocks.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/starrocks.py
++++ b/sqlglot/generators/starrocks.py
+@@ -56,7 +56,6 @@
+ 
+ 
+ class StarRocksGenerator(MySQLGenerator):
+-    EXCEPT_INTERSECT_SUPPORT_ALL_CLAUSE = False
+     JSON_TYPE_REQUIRED_FOR_EXTRACTION = False
+     VARCHAR_REQUIRES_SIZE = False
+     PARSE_JSON_NAME: str | None = "PARSE_JSON"

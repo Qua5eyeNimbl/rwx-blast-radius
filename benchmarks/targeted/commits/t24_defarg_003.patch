@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parsers/bigquery.py b/sqlglot/parsers/bigquery.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/bigquery.py
++++ b/sqlglot/parsers/bigquery.py
+@@ -423,7 +423,7 @@
+             return self._parse_as_command(self._prev)
+         return self.expression(exp.ForIn(this=this, expression=self._parse_statement()))
+ 
+-    def _parse_table_part(self, schema: bool = False) -> exp.Expr | None:
++    def _parse_table_part(self, schema: bool = True) -> exp.Expr | None:
+         this = super()._parse_table_part(schema=schema) or self._parse_number()
+ 
+         # https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#table_names

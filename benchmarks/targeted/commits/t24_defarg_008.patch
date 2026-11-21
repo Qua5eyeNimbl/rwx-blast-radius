@@ -1,0 +1,13 @@
+diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/dialect.py
++++ b/sqlglot/dialects/dialect.py
+@@ -2203,7 +2203,7 @@
+     dialect: DialectType,
+     date_trunc_unabbreviate: bool = True,
+     default_date_trunc_unit: str | None = None,
+-    date_trunc_requires_part: bool = True,
++    date_trunc_requires_part: bool = False,
+     fractions_supported: bool = False,
+ ) -> exp.DateTrunc | exp.Trunc | exp.Anonymous:
+     """

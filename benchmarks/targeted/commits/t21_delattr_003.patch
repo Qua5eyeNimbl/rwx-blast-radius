@@ -1,0 +1,12 @@
+diff --git a/sqlglot/dialects/snowflake.py b/sqlglot/dialects/snowflake.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/snowflake.py
++++ b/sqlglot/dialects/snowflake.py
+@@ -35,7 +35,6 @@
+     ARRAY_AGG_INCLUDES_NULLS = None
+     ARRAY_FUNCS_PROPAGATES_NULLS = True
+     ALTER_TABLE_ADD_REQUIRED_FOR_EACH_COLUMN = False
+-    ALTER_TABLE_DROP_REQUIRED_FOR_EACH_COLUMN = False
+     TRY_CAST_REQUIRES_STRING = True
+     SUPPORTS_ALIAS_REFS_IN_JOIN_CONDITIONS = True
+     LEAST_GREATEST_IGNORES_NULLS = False

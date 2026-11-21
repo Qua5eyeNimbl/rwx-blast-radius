@@ -1,0 +1,12 @@
+diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/dialect.py
++++ b/sqlglot/dialects/dialect.py
+@@ -813,7 +813,6 @@
+     ON_CONDITION_EMPTY_BEFORE_ERROR = True
+     """Whether "X ON EMPTY" should come before "X ON ERROR" (for dialects like T-SQL, MySQL, Oracle)."""
+ 
+-    ARRAY_AGG_INCLUDES_NULLS: bool | None = True
+     """Whether ArrayAgg needs to filter NULL values."""
+ 
+     ARRAY_FUNCS_PROPAGATES_NULLS = False

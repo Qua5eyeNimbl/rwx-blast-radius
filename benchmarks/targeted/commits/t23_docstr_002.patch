@@ -1,0 +1,10 @@
+diff --git a/sqlglot/expressions/aggregate.py b/sqlglot/expressions/aggregate.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/aggregate.py
++++ b/sqlglot/expressions/aggregate.py
+@@ -1,4 +1,4 @@
+-"""sqlglot expressions - aggregate, window, and statistical functions."""
++"""Note: sqlglot expressions - aggregate, window, and statistical functions."""
+ 
+ from __future__ import annotations
+ 

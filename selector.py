@@ -717,7 +717,10 @@ def diff_body(kind, unit, a_body, b_body, parent_hdr, out: list, ctx: _Ctx):
 
 
 def diff_stmt(kind, unit, a, b, out, ctx: _Ctx):
-    if type(a) is type(b) and _dump(a) == _dump(b):
+    # defs and classes are compared by header below (their bodies are units
+    # of their own), so a full dump of them is never needed
+    if type(a) is type(b) and not isinstance(a, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
+            and _dump(a) == _dump(b):
         return
     if isinstance(a, (ast.FunctionDef, ast.AsyncFunctionDef)) and type(a) is type(b):
         if _header_dump(a) == _header_dump(b):
@@ -1705,8 +1708,9 @@ def schedule(ids, lookup) -> list[list[int]]:
     LPT for every k, then a small local search on the best few k."""
     if not ids:
         return []
-    items = sorted(ids, key=lambda n: (-_dur(lookup, n), n))
-    durs = [_dur(lookup, n) for n in items]
+    ms = {n: _dur(lookup, n) for n in ids}
+    items = sorted(ids, key=lambda n: (-ms[n], n))
+    durs = [ms[n] for n in items]
     total = sum(durs)
     best = None
     for k in range(1, min(MAX_WORKERS, len(items)) + 1):
@@ -1719,15 +1723,16 @@ def schedule(ids, lookup) -> list[list[int]]:
             w = min(range(k), key=lambda i: (loads[i], i))
             buckets[w].append(n)
             loads[w] += d
-        buckets, loads = _improve(buckets, loads, lookup)
+        buckets, loads = _improve(buckets, loads, ms)
         cost = max(loads) + WORKER_COST_MS * k
         if best is None or cost < best[0]:
             best = (cost, buckets)
     return [sorted(b) for b in best[1] if b]
 
 
-def _improve(buckets, loads, lookup, rounds=50):
-    """Move/swap single tests out of the most loaded worker while it helps."""
+def _improve(buckets, loads, ms, rounds=50):
+    """Move/swap single tests out of the most loaded worker while it helps.
+    `ms` maps test number -> duration in ms."""
     k = len(buckets)
     if k < 2:
         return buckets, loads
@@ -1739,8 +1744,8 @@ def _improve(buckets, loads, lookup, rounds=50):
                 continue
             gap = loads[hi] - loads[lo]
             # move
-            for n in sorted(buckets[hi], key=lambda x: -_dur(lookup, x)):
-                d = _dur(lookup, n)
+            for n in sorted(buckets[hi], key=lambda x: -ms[x]):
+                d = ms[n]
                 if 0 < d < gap:
                     buckets[hi].remove(n)
                     buckets[lo].append(n)
@@ -1750,11 +1755,16 @@ def _improve(buckets, loads, lookup, rounds=50):
                     break
             if improved:
                 break
-            # swap
+            # swap: first (n, m) in list order with dn - gap < dm < dn
+            lo_d = [ms[m] for m in buckets[lo]]
+            if not lo_d:
+                continue
+            lo_min, lo_max = min(lo_d), max(lo_d)
             for n in buckets[hi]:
-                dn = _dur(lookup, n)
-                for m in buckets[lo]:
-                    dm = _dur(lookup, m)
+                dn = ms[n]
+                if lo_min >= dn or lo_max <= dn - gap:
+                    continue  # no m of this worker can qualify
+                for m, dm in zip(buckets[lo], lo_d):
                     if 0 < dn - dm < gap:
                         buckets[hi].remove(n)
                         buckets[lo].remove(m)

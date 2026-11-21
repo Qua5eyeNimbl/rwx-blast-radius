@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parsers/spark2.py b/sqlglot/parsers/spark2.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/spark2.py
++++ b/sqlglot/parsers/spark2.py
+@@ -32,6 +32,7 @@
+ 
+ 
+ class Spark2Parser(HiveParser):
++    ALTER_DROP_REQUIRES_COLUMN = False
+     IS_PREDICATE_PRECEDENCE = IsPredicatePrecedence.LOW
+ 
+     NORMALIZE_DECIMAL_LITERALS = False

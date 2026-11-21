@@ -1,0 +1,13 @@
+diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/dialect.py
++++ b/sqlglot/dialects/dialect.py
+@@ -1315,7 +1315,7 @@
+ 
+         raise ValueError(f"Unexpected argument for identify: '{identify}'")
+ 
+-    def quote_identifier(self, expression: E, identify: bool = True) -> E:
++    def quote_identifier(self, expression: E, identify: bool = False) -> E:
+         """
+         Adds quotes to a given expression if it is an identifier.
+ 

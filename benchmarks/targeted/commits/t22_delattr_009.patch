@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -1882,7 +1882,6 @@
+         "VALIDATE": lambda self: self._parse_analyze_validate(),
+     }
+ 
+-    PARTITION_KEYWORDS: t.ClassVar = {"PARTITION", "SUBPARTITION"}
+ 
+     AMBIGUOUS_ALIAS_TOKENS: t.ClassVar = (TokenType.LIMIT, TokenType.OFFSET)
+ 
