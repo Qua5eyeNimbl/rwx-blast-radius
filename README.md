@@ -1,4 +1,4 @@
-# RWX Blast Radius — Team Entry (v2: coverage-index selector)
+# RWX Blast Radius — Team Entry (v4: coverage-index selector)
 
 Submission candidate for the November 20–22, 2026 Builders Buildathon RWX track.
 `selector.py` reads `/data/tests.json` and `/data/commits/*.patch` and prints one
@@ -10,7 +10,9 @@ Submission candidate for the November 20–22, 2026 Builders Buildathon RWX trac
 |---|---:|---:|---:|---|
 | organizer starter | 1,210.470 s | 0 | – | – |
 | v0.1 (file-level rules) | 494.300 s | 0 | – | – |
-| **v2 (this branch)** | **118.978 s** | **0** | ~0.6 s | 50 mutations, **0 misses**, 328.7 s vs 109.6 s oracle |
+| v2 | 118.978 s | 0 | ~4 s | 50 mutations, 0 misses, 328.7 s vs 109.6 s oracle |
+| v3 (board: 180.3 s) | 118.978 s | 0 | ~1.8 s | 96 mutations, 0 misses, 744.9 s vs 324.4 s oracle |
+| **v4 (this branch)** | **112.359 s** | **0** | **~0.5 s** | 96 mutations, **0 misses**, 720.4 s; plus targeted set (see `benchmarks/holdout/README.md`) |
 
 Sample result is from `docker run` with the exact organizer `RUN_FLAGS` (read-only,
 no network, `nobody`, 2 CPU). A selector that already knew the sample's failing tests
@@ -52,13 +54,22 @@ At runtime, for each patch:
    same for Enum members → equivalent.
 3. Map each real change to tests:
    - statement inside a function/lambda → tests that executed that statement;
-   - default-argument change → tests that called the function;
+   - default-argument change → tests that called the function *and* ran a call
+     that leaves that parameter out (every reference must be a direct call;
+     dunder and decorated functions are not narrowed);
    - code that also runs while a module imports → plus every test that
      (transitively) imports that module (an exception there breaks them all);
    - class/module constant → tests that use the class/module, narrowed to tests
      executing a *use* of the value (followed through exact pass-throughs) when
      every reference is traceable, or to tests that built the expression type
-     for dicts keyed by expression classes (`TRANSFORMS`, type metadata);
+     for dicts keyed by expression classes (`TRANSFORMS`, type metadata).
+     When only dict *values* change, `k in D`, `len(D)` and truth tests of D are
+     not uses. A constant read through the class name (`Foo.X`) is not narrowed
+     to users of the class;
+   - a literal class attribute removed or added → same use tracing, where for a
+     removal every reference (pass-throughs included) can raise;
+   - docstring edits (still non-empty) → nothing: `__doc__` is only tested for
+     emptiness and doctests are not in the collected suite;
    - class constant of a class some module instantiates while importing →
      plus every test that imports that module (the import can now raise);
    - non-literal import-time edits → all importers;
@@ -94,7 +105,11 @@ python tools/evaluate.py sample sample/answers.json output.jsonl   # per-commit 
 ## Files
 
 - `selector.py` — judge entry point.
-- `index/` — pinned-commit-derived coverage/trace index + pinned source (≈1.8 MB).
+- `index/` — pinned-commit-derived coverage/trace index + pinned source (≈1.8 MB),
+  and `trace_cache.json.gz`: use traces and call sites of every constant/function
+  name of the pinned source, precomputed by `tools/build_trace_cache.py`. It holds
+  a hash of the tracing code; the selector ignores it (and traces live) if that
+  code changes. `tests_local` checks it is fresh.
 - `tools/` — offline index build, tracing plugin, mutation generator, ground-truth
   runner, evaluators. Not copied into the image.
 - `benchmarks/holdout/` — independent holdout patches and their measured labels.

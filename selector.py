@@ -830,7 +830,80 @@ def diff_module(base_src: str, new_src: str, hunks=None):
 # constant name of the pinned tree are precomputed (tools/build_trace_cache.py).
 # The cache records a hash of the code below; any edit to it voids the cache.
 TRACE_CODE = ("_trace_uses_live", "_index_file", "_in_slots", "_scope_of", "_key_only_use",
-              "_truth_only", "_names_class", "_call_sites_live", "_attr_lookup_string")
+              "_truth_only", "_names_class", "_call_sites_live", "_attr_lookup_string",
+              "static_imports", "collection_importers", "module_name")
+
+
+def static_imports(rel: str, text: str) -> set:
+    """Modules imported while `rel` is imported: import statements outside
+    function bodies and outside `if TYPE_CHECKING:` blocks, with parent
+    packages and `from pkg import submodule` candidates."""
+    mod = Index.module_name(rel)
+    pkg = mod if rel.endswith("__init__.py") else mod.rpartition(".")[0]
+    out = set()
+
+    def add(name):
+        parts = name.split(".")
+        for k in range(1, len(parts) + 1):
+            out.add(".".join(parts[:k]))
+
+    def walk(body):
+        for st in body:
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if isinstance(st, ast.Import):
+                for a in st.names:
+                    add(a.name)
+            elif isinstance(st, ast.ImportFrom):
+                if st.level:
+                    parts = pkg.split(".") if pkg else []
+                    if st.level > 1:
+                        parts = parts[: len(parts) - (st.level - 1)]
+                    base = ".".join(parts + ([st.module] if st.module else []))
+                else:
+                    base = st.module or ""
+                if base:
+                    add(base)
+                    for a in st.names:
+                        out.add(base + "." + a.name)
+            elif isinstance(st, ast.If) and any(
+                    (isinstance(n, ast.Name) and n.id == "TYPE_CHECKING")
+                    or (isinstance(n, ast.Attribute) and n.attr == "TYPE_CHECKING") for n in ast.walk(st.test)):
+                walk(st.orelse)
+            else:
+                for f in ("body", "orelse", "finalbody", "handlers"):
+                    sub = getattr(st, f, None)
+                    if sub:
+                        if f == "handlers":
+                            for h in sub:
+                                walk(h.body)
+                        else:
+                            walk(sub)
+
+    walk(ast.parse(text).body)
+    return out
+
+
+def collection_importers(sources: dict) -> dict:
+    """module -> test files whose import (pytest collection) imports it."""
+    mods = {Index.module_name(r): r for r in sources if r.endswith(".py")}
+    graph = {m: {x for x in static_imports(r, sources[r]) if x in mods and x != m} for m, r in mods.items()}
+    out: dict = {}
+    for m, r in mods.items():
+        if not (r.startswith("tests/") and r.rsplit("/", 1)[-1].startswith("test_")):
+            continue
+        seen = set()
+        parts = m.split(".")
+        todo = [".".join(parts[:k]) for k in range(1, len(parts) + 1) if ".".join(parts[:k]) in mods]
+        while todo:
+            x = todo.pop()
+            if x in seen:
+                continue
+            seen.add(x)
+            todo.extend(graph.get(x, ()))
+        for x in seen:
+            out.setdefault(x, []).append(r)
+    return {k: sorted(v) for k, v in out.items()}
 
 
 def trace_code_hash() -> str:
@@ -844,7 +917,17 @@ def trace_code_hash() -> str:
     return hashlib.sha256("\n".join(sorted(segs)).encode()).hexdigest()
 
 
+_TRACE_CACHE: dict = {}
+
+
 def _load_trace_cache(directory) -> dict:
+    key = str(directory)
+    if key not in _TRACE_CACHE:
+        _TRACE_CACHE[key] = _read_trace_cache(directory)
+    return _TRACE_CACHE[key]
+
+
+def _read_trace_cache(directory) -> dict:
     if os.environ.get("RWX_NO_TRACE_CACHE"):
         return {}
     try:
@@ -865,6 +948,9 @@ class Index:
             ix = json.load(fh)
         self.ix = ix
         number = {t["id"]: t["number"] for t in tests}
+        self.by_file: dict[str, set] = {}
+        for t in tests:
+            self.by_file.setdefault(t["file"], set()).add(t["number"])
         # index test position -> test number in this run (None if absent)
         self.pos2num = [number.get(tid) for tid in ix["tests"]]
         self.sets = ix["sets"]
@@ -967,7 +1053,22 @@ class Index:
         """Tests that (transitively) import the module, even from cache: if
         importing it raises, all of them fail."""
         sid = self.ix.get("requirers", {}).get(module)
-        return set(self.tset(sid)) if sid is not None else set()
+        out = set(self.tset(sid)) if sid is not None else set()
+        return out | self.collectors(module)
+
+    _collect_files = None
+
+    def collectors(self, module: str) -> set:
+        """Every test of each test file whose collection imports the module
+        (pinned-source import graph): an import error there fails them all."""
+        if self._collect_files is None:
+            Index._collect_files = _load_trace_cache(self.directory).get("__collect__", {})
+            if not Index._collect_files:
+                Index._collect_files = collection_importers(self.sources())
+        out = set()
+        for f in self._collect_files.get(module, ()):
+            out |= self.by_file.get(f, set())
+        return out
 
     def file_tests(self, test_file: str) -> set:
         sid = self.ix["file_runtime"].get(test_file)
@@ -1063,7 +1164,8 @@ class Selector:
                 out |= ts
                 for m in imods:
                     if m != mod:
-                        out |= ix.module_users(m, deep=True)
+                        # called while m imports: a raise breaks m's importers
+                        out |= ix.module_users(m, deep=True) | ix.collectors(m)
             # ... and of those, only calls that leave a changed parameter out
             narrowed = self._narrow_defaults(ch)
             if narrowed is not None:

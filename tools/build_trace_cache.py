@@ -46,6 +46,7 @@ def main():
                 funcs.add(n.name)
     for nm in sorted(funcs):
         uses["call:" + nm] = [sel._call_sites_live(nm)]
+    uses["__collect__"] = S.collection_importers(sel.index.sources())
     out = os.path.join(HERE, "index", "trace_cache.json.gz")
     with gzip.open(out, "wt", encoding="utf-8", compresslevel=9) as fh:
         json.dump({"code": S.trace_code_hash(), "uses": uses}, fh, separators=(",", ":"), sort_keys=True)

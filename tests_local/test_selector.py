@@ -202,6 +202,20 @@ index 1111111..2222222 100644
         sel = self.selector.for_patch(p)
         self.assertTrue(0 < len(sel) < 50, len(sel))
 
+    def test_import_time_breakage_fails_whole_collected_files(self):
+        # DuckDB's generator parses SQL templates while importing; flipping
+        # this default makes that parse raise, so every tests/dialects file
+        # (they all import test_dialect -> sqlglot.dialects.duckdb) fails at
+        # collection, including tests that never touch DuckDB (generated
+        # patch, label from the pinned suite).
+        lines = self.selector.index.sources()["sqlglot/parser.py"].split("\n")
+        k = next(i for i, ln in enumerate(lines)
+                 if "parse_interval: bool = True, fallback_to_identifier: bool = False" in ln)
+        p = mkpatch("sqlglot/parser.py", k, [lines[k]], [lines[k].replace("identifier: bool = False", "identifier: bool = True")],
+                    [lines[k - 1]], [lines[k + 1]])
+        ids = self.ids(self.selector.for_patch(p))
+        self.assertIn("tests/dialects/test_bigquery.py::TestBigQuery::test_convert", ids)
+
     def test_selected_numbers_are_valid(self):
         for patch in sorted((ROOT / "sample" / "commits").glob("*.patch")):
             with self.subTest(patch=patch.name):
