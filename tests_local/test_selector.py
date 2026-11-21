@@ -148,6 +148,60 @@ index 1111111..2222222 100644
         for f in ("tests/dialects/test_mysql.py", "tests/dialects/test_dialect.py"):
             self.assertLessEqual(self.selector.by_file[f], sel, f)
 
+    def _holdout(self, name):
+        return (ROOT / "benchmarks" / "holdout" / "commits" / f"{name}.patch").read_text()
+
+    def test_trace_cache_is_fresh(self):
+        import gzip
+
+        from selector import INDEX_DIR, trace_code_hash
+
+        with gzip.open(INDEX_DIR / "trace_cache.json.gz", "rt", encoding="utf-8") as fh:
+            blob = json.load(fh)
+        self.assertEqual(blob["code"], trace_code_hash(), "rebuild: python tools/build_trace_cache.py")
+        for name in ("NUMERIC_ESCAPES", "VAR_LIKE", "DASH_COMMENT_REQUIRES_BOUNDARY", "TYPE_MAPPING"):
+            for ks in (False, True):
+                for er in (False, True):
+                    live = self.selector._trace_uses_live({name}, keys_stable=ks, every_ref=er)
+                    cached = blob["uses"][f"{name}|{int(ks)}{int(er)}"][0]
+                    self.assertEqual(None if live is None else sorted(map(list, live)), cached, name)
+        for name in ("flatten", "func", "quote_identifier"):
+            self.assertEqual(self.selector._call_sites_live(name), blob["uses"]["call:" + name][0], name)
+
+    def test_removed_attribute_passed_at_import_breaks_importers(self):
+        # Deleting the base Tokenizer flag makes Tokenizer() raise while some
+        # modules import; every dialect test fails at collection (labelled
+        # holdout h11_007).  The pass-through line must count as a use.
+        sel = self.selector.for_patch(self._holdout("h11_007_delete"))
+        self.assertLessEqual(self.selector.by_file["tests/dialects/test_duckdb.py"], sel)
+
+    def test_constant_read_through_class_name_is_not_narrowed_to_class_users(self):
+        # temporal.py reads TimeUnit.VAR_LIKE directly; DuckDB's DATE_TRUNC
+        # test fails when it is removed though it builds no TimeUnit
+        # (generated patch, label from the pinned suite).
+        p = mkpatch("sqlglot/expressions/core.py", 2074,
+                    ["    VAR_LIKE: t.ClassVar[tuple[Type[Expr], ...]] = (Column, Literal, Var)"], [],
+                    [""], [""])
+        ids = self.ids(self.selector.for_patch(p))
+        self.assertIn("tests/dialects/test_duckdb.py::TestDuckDB::test_date_trunc", ids)
+
+    def test_docstring_edit_selects_nothing(self):
+        src = self.selector.index.sources()["sqlglot/expressions/string.py"]
+        first = src.split("\n", 1)[0]
+        self.assertTrue(first.startswith('"""'))
+        p = mkpatch("sqlglot/expressions/string.py", 1, [first], [first.replace('"""', '"""Note: ', 1)])
+        self.assertEqual(self.selector.for_patch(p), set())
+
+    def test_dict_value_edit_ignores_membership_tests(self):
+        # Dialect's metaclass only asks `"x" in NUMERIC_ESCAPES` at import;
+        # a value edit is seen where escapes are decoded, by Snowflake users.
+        lines = self.selector.index.sources()["sqlglot/dialects/snowflake.py"].split("\n")
+        k = next(i for i, ln in enumerate(lines) if "NUMERIC_ESCAPES = {" in ln)
+        p = mkpatch("sqlglot/dialects/snowflake.py", k, [lines[k]], [lines[k].replace('"u": (16', '"u": (17')],
+                    [lines[k - 1]], [lines[k + 1]])
+        sel = self.selector.for_patch(p)
+        self.assertTrue(0 < len(sel) < 50, len(sel))
+
     def test_selected_numbers_are_valid(self):
         for patch in sorted((ROOT / "sample" / "commits").glob("*.patch")):
             with self.subTest(patch=patch.name):

@@ -564,12 +564,9 @@ def _attr_lookup_string(n) -> bool:
     return True
 
 
-def _call_supplies(call, changed, params) -> bool:
-    """True when `call` passes every parameter in `changed` explicitly."""
-    if any(isinstance(x, ast.Starred) for x in call.args) or any(k.arg is None for k in call.keywords):
-        return False
-    kws = {k.arg for k in call.keywords}
-    npos = len(call.args)
+def _supplies(changed, params, kws, npos) -> bool:
+    """True when a call with keyword names `kws` and `npos` positional
+    arguments passes every parameter in `changed` explicitly."""
     for p in changed:
         if p in kws:
             continue
@@ -829,6 +826,39 @@ def diff_module(base_src: str, new_src: str, hunks=None):
 
 
 # ===================================================================== index
+# The use trace reads only the pinned sources, so its results for every
+# constant name of the pinned tree are precomputed (tools/build_trace_cache.py).
+# The cache records a hash of the code below; any edit to it voids the cache.
+TRACE_CODE = ("_trace_uses_live", "_index_file", "_in_slots", "_scope_of", "_key_only_use",
+              "_truth_only", "_names_class", "_call_sites_live", "_attr_lookup_string")
+
+
+def trace_code_hash() -> str:
+    import hashlib
+
+    text = Path(__file__).read_text(encoding="utf-8")
+    segs = []
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.FunctionDef) and node.name in TRACE_CODE:
+            segs.append(node.name + "\n" + (ast.get_source_segment(text, node) or ""))
+    return hashlib.sha256("\n".join(sorted(segs)).encode()).hexdigest()
+
+
+def _load_trace_cache(directory) -> dict:
+    if os.environ.get("RWX_NO_TRACE_CACHE"):
+        return {}
+    try:
+        with gzip.open(directory / "trace_cache.json.gz", "rt", encoding="utf-8") as fh:
+            blob = json.load(fh)
+        if blob.get("code") != trace_code_hash():
+            log("trace cache: code hash mismatch, ignored")
+            return {}
+        return blob["uses"]
+    except Exception as e:  # missing or unreadable: trace live
+        log("trace cache unavailable:", e)
+        return {}
+
+
 class Index:
     def __init__(self, tests: list[dict], directory: Path):
         with gzip.open(directory / "index.json.gz", "rt", encoding="utf-8") as fh:
@@ -1109,10 +1139,33 @@ class Selector:
         if not changed:
             return None
         params = [x.arg for x in a.args.posonlyargs + a.args.args]
-        name = a.name
+        sites = self._call_sites(a.name)
+        if sites is None:
+            return None
         ix = self.index
         out = set()
-        for frel, text in ix.sources().items():
+        for frel, lo, hi, kws, npos, star in sites:
+            if star or not _supplies(changed, params, set(kws), npos):
+                ts, imods = ix.line_tests(frel, lo, hi)
+                out |= ts
+                for m in imods:
+                    out |= ix.module_users(m, deep=True) | ix.requirers(m)
+        return out
+
+    def _call_sites(self, name):
+        if self._trace_cache is None:
+            Selector._trace_cache = _load_trace_cache(self.index.directory)
+        hit = self._trace_cache.get("call:" + name)
+        if hit is not None:
+            return hit[0]
+        return self._call_sites_live(name)
+
+    def _call_sites_live(self, name):
+        """Every reference to `name` as (file, first line, last line, keyword
+        names, positional count, has */**), or None when some reference is
+        not a direct call (callback, assignment, getattr-style string)."""
+        out = []
+        for frel, text in sorted(self.index.sources().items()):
             if name not in text:
                 continue
             for n in self._named_nodes(frel).get(name, ()):
@@ -1125,17 +1178,14 @@ class Selector:
                 if not ((isinstance(n, ast.Name) and n.id == name) or (isinstance(n, ast.Attribute) and n.attr == name)):
                     continue
                 par = getattr(n, "_rwx_parent", None)
-                if isinstance(par, ast.FunctionDef) or isinstance(par, ast.AsyncFunctionDef):
-                    continue
                 if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                     return None
                 if not (isinstance(par, ast.Call) and par.func is n):
                     return None
-                if not _call_supplies(par, changed, params):
-                    ts, imods = ix.line_tests(frel, par.lineno, getattr(par, "end_lineno", par.lineno))
-                    out |= ts
-                    for m in imods:
-                        out |= ix.module_users(m, deep=True) | ix.requirers(m)
+                star = any(isinstance(x, ast.Starred) for x in par.args) or any(k.arg is None for k in par.keywords)
+                out.append([frel, par.lineno, getattr(par, "end_lineno", par.lineno),
+                            sorted(k.arg for k in par.keywords if k.arg), len(par.args), star])
+        out.sort()
         return out
 
     def _expr_class_users(self, name: str):
@@ -1341,7 +1391,28 @@ class Selector:
         self._ast_cache[frel] = t
         self._names_cache[frel] = d
 
+    _trace_cache = None
+
+    def _cached_trace(self, start_names, keys_stable, every_ref):
+        if self._trace_cache is None:
+            Selector._trace_cache = _load_trace_cache(self.index.directory)
+        if len(start_names) != 1:
+            return False, None
+        (name,) = start_names
+        hit = self._trace_cache.get(f"{name}|{int(keys_stable)}{int(every_ref)}")
+        if hit is None:
+            return False, None
+        uses, static = hit
+        self._static_ref = static
+        return True, (None if uses is None else {tuple(u) for u in uses})
+
     def _trace_uses(self, start_names, keys_stable=False, every_ref=False):
+        found, res = self._cached_trace(start_names, keys_stable, every_ref)
+        if found:
+            return res
+        return self._trace_uses_live(start_names, keys_stable, every_ref)
+
+    def _trace_uses_live(self, start_names, keys_stable=False, every_ref=False):
         ix = self.index
         src = ix.sources()
         names = set(start_names)
