@@ -37,6 +37,29 @@ Board context when we submitted (130 teams): leaders were about 152–157 s; 180
 
 v0.1 scored 494.3 s on the sample.
 
+## Local number vs board number (why 119 s became 180 s)
+
+The practice board scores **40 commits; the sample has 30.** Proof: the starter (run every test, 3 workers)
+costs the same on every commit, 40.349 s (LPT over 3 workers; sample total 1,210.470 s = 30 × 40.349).
+The board's starter baseline is 1,614.1 s = 40.0 × 40.349. So compare **per commit**, not totals:
+
+| | Sample (30) | Board (40) |
+|---|---|---|
+| v3 simulated total | 118.978 s | 177.784 s |
+| v3 per commit | 3.97 s | 4.44 s (1.12× the sample) |
+| Leaders per commit | — | ~3.8–3.9 s (151.8–157 s) |
+| Best possible per commit | 3.15 s | unknown |
+
+Of the 59 s difference, ~40 s is just 10 more commits; the remaining ~19 s is the board's commits being
+~12% more expensive each (one extra `test_execute_tpcds`-style commit is ~25 s). CPU: board 2.5 s vs
+1.8 s here (≈1.35×).
+
+Rough board prediction for a new version, from one data point (re-fit after each submission):
+`board ≈ sample_simulated × 40/30 × 1.12 + local_CPU × 1.35`. For v3: 158.6 × 1.12 + 2.5 ≈ 180.
+
+The final has ~1.5× the practice commits (~60), so totals there will be ~1.5× larger for everyone;
+only rank matters.
+
 ## What v3 changed (vs v2)
 
 1. **Fixed a real miss.** Holdout `h11_021` changes Join's `arg_types` (`"match_condition": False → True`).
