@@ -20,7 +20,8 @@ Deadline: **Sun Nov 22, 10:00 AM CT**. Official rules: https://www.joinbuilders.
      `build_index.py`); and a fresh checkout with no `.pyc` makes imports open `.py` files, which were
      traced as data reads and would broaden selections. Now precompiles first. A clean rebuild with the
      fixed script reproduces the shipped index exactly in every field, plus `cls_mods`.
-  4. Holdout batch 2 labelled (26 more; 95 total) and its 40 patches committed.
+  4. Holdout batch 2 fully labelled (27 more; 96 total, all 100 patches graded except 4 of batch 1 as before)
+     and its 40 patches committed. `h11_009` needed `GT_TIMEOUT` (serial run 1,309 s; 597 failing).
   5. New unit test for the import-time-instance case (fails on v2, passes now).
 - **Nothing pushed by me, no submission made.**
 
@@ -30,13 +31,14 @@ Deadline: **Sun Nov 22, 10:00 AM CT**. Official rules: https://www.joinbuilders.
 |---|---|---|
 | Public sample, Docker + organizer `RUN_FLAGS` | 118.978 s, 0 misses | **118.978 s, 0 misses** (identical output) |
 | Container CPU, 2.1 GHz Xeon, 3 runs | 4.0–4.7 s | **1.81–1.85 s** |
-| Holdout, 95 graded (h7 ×56, h11 ×39) | 1,015.5 s, **1 miss** | **718.6 s, 0 misses** (oracle 298.0 s) |
+| Holdout, 96 graded (h7 ×56, h11 ×40) | 1,041.8 s, **1 miss** | **744.9 s, 0 misses** (oracle 324.4 s) |
 | Commits whose selection changed (sample + 100 holdout) | — | 2, both only *added* tests (h11_021 fix; h7_031 +2 s) |
 | Unit tests (`tests_local`) | 20 pass | 21 pass |
 | Repo size | 2.7 MB | 3.0 MB |
 
 The earlier "container CPU ≈ 0.6 s" was measured on a faster machine; the board's CPU is unknown, so
-CPU is worth cutting. Label parity check: re-grading h11_001/h11_002 here matched the stored labels.
+CPU is worth cutting. A 2-worker run of h11_009 also failed `test_generator_memory`; the serial run (the
+labelling standard) did not, so that is order-dependent. Label parity check: re-grading h11_001/h11_002 here matched the stored labels.
 
 Most remaining holdout over-cost still comes from `test_execute_tpcds` (21.5 s); it stays (see v2 notes:
 real failure in ~3 of 11 selections).

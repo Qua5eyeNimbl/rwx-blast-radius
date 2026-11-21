@@ -5,5 +5,5 @@ Evaluate: `RWX_DATA=<dir with tests.json + commits/> python selector.py > out.js
 then `python tools/eval_holdout.py <dir> out.jsonl benchmarks/holdout/labels.json`.
 Never packaged in the image (see .dockerignore).
 
-`h11_009` is not labelled yet: its serial full-suite run takes longer than ground_truth.py's 900 s
-limit (thousands of failing subtests, no hung test). Label it with a larger timeout.
+`h11_009` was labelled with `GT_TIMEOUT=3000`: its serial run takes ~1,300 s (thousands of failing
+subtests, no hung test).
