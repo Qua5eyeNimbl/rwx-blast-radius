@@ -251,6 +251,10 @@ class Units:
             j += 1
             k = f"{qual}#{j}"
         self.units[k] = (kind, body, node)
+        if body and isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            st = body[0]
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
+                st._rwx_doc = True  # docstring (see _inert_string_stmt)
         return k
 
     def _walk(self, body, qual, kind, node):
@@ -575,6 +579,15 @@ def _call_supplies(call, changed, params) -> bool:
     return True
 
 
+def _names_class(v) -> bool:
+    """`v` looks like a reference to a class (Foo, exp.Foo), not an object."""
+    if isinstance(v, ast.Name):
+        return v.id[:1].isupper()
+    if isinstance(v, ast.Attribute):
+        return v.attr[:1].isupper()
+    return False
+
+
 def _truth_only(n) -> bool:
     """`n` is evaluated only for its truth value."""
     p = getattr(n, "_rwx_parent", None)
@@ -772,14 +785,6 @@ def _unit_span(node):
     return (_start(node), node.end_lineno)
 
 
-def _mark_docstrings(tree):
-    for n in ast.walk(tree):
-        if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and n.body:
-            st = n.body[0]
-            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
-                st._rwx_doc = True
-
-
 def _inert_string_stmt(a, b) -> bool:
     """Both statements are bare string expressions whose edit nothing can
     observe: a string statement that is not a docstring is discarded, and a
@@ -801,8 +806,6 @@ def diff_module(base_src: str, new_src: str, hunks=None):
     """Return list[Change] or raise SyntaxError for the new source."""
     ta = ast.parse(base_src)
     tb = ast.parse(new_src)
-    _mark_docstrings(ta)
-    _mark_docstrings(tb)
     if hunks is None:
         a_changed = set(range(1, base_src.count("\n") + 2))
         b_changed = set(range(1, new_src.count("\n") + 2))
@@ -1266,7 +1269,8 @@ class Selector:
             if imods:
                 return None
             out |= ts
-        if ch.kind == "class":
+        if ch.kind == "class" and not self._static_ref:
+            # every read goes through an object; it must belong to the class
             users = ix.class_users(mod, ch.unit.split("#", 1)[0]) | self._nested_users(mod, ch.unit)
             if not users:
                 return None
@@ -1345,6 +1349,7 @@ class Selector:
         uses = set()
         defined_params = set()
         handed = set()
+        self._static_ref = False
         while todo:
             name = todo.pop()
             files = [f for f, text in src.items() if name in text]
@@ -1363,6 +1368,8 @@ class Selector:
                     if not hit:
                         continue
                     par = getattr(n, "_rwx_parent", None)
+                    if isinstance(n, ast.Attribute) and _names_class(n.value):
+                        self._static_ref = True  # Foo.NAME: read without an instance
                     if isinstance(n, ast.Constant):
                         if self._in_slots(n):
                             continue
