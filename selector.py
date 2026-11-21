@@ -1784,6 +1784,11 @@ def _improve(buckets, loads, ms, rounds=50):
 
 
 # ===================================================================== main
+# DIAGNOSTIC PROBE (not a final candidate): v4 minus these tests, to measure
+# their cost and failure count on the practice board.
+PROBE_DROP = {"tests/test_executor.py::TestExecutor::test_execute_tpcds"}
+
+
 def main() -> None:
     tests = json.loads((DATA / "tests.json").read_text(encoding="utf-8"))["tests"]
     patches = sorted((DATA / "commits").glob("*.patch"))
@@ -1803,6 +1808,7 @@ def main() -> None:
         except Exception as e:
             reasons.append(f"fatal:{e}")
             ids = set(all_ids)
+        ids = {n for n in ids if lookup[n]["id"] not in PROBE_DROP}
         workers = schedule(ids, lookup)
         log(patch.stem, len(ids), reasons)
         out_lines.append(json.dumps({"commit": patch.stem, "workers": workers}, separators=(",", ":")))
