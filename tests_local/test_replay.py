@@ -9,7 +9,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import replay  # noqa: E402
-from selector import Change, _bound_names  # noqa: E402
+from selector import Change, _bound_names, replay_ignorable  # noqa: E402
 
 
 def _ch(old_src, new_src, kind="class"):
@@ -34,6 +34,28 @@ class TestBoundNames(unittest.TestCase):
     def test_dispatched_and_protocol_names_are_refused(self):
         self.assertIsNone(_bound_names(_ch("select_sql = other_sql", "select_sql = third_sql")))
         self.assertIsNone(_bound_names(_ch("__slots__ = ()", "__slots__ = ('a',)")))
+
+
+class TestReplayScope(unittest.TestCase):
+    def test_ignorable_files(self):
+        self.assertTrue(replay_ignorable("tests/fixtures/optimizer/simplify.sql"))
+        self.assertTrue(replay_ignorable("tests/test_optimizer.py"))
+        self.assertFalse(replay_ignorable("tests/fixtures/optimizer/tpc-ds/tpc-ds.sql"))
+        self.assertFalse(replay_ignorable("tests/fixtures/optimizer/tpc-h/customer.csv.gz"))
+        self.assertFalse(replay_ignorable("tests/test_executor.py"))
+        self.assertFalse(replay_ignorable("tests/helpers.py"))
+        self.assertFalse(replay_ignorable("tests/__init__.py"))
+        self.assertFalse(replay_ignorable("sqlglot/optimizer/simplify.py"))
+        self.assertFalse(replay_ignorable("setup.py"))
+
+    def test_inserted_statements_bind_their_names(self):
+        ch = _ch(None, None, kind="module")
+        ch.new_nodes = tuple(ast.parse("from a.b import c as d\nimport e.f\ndef g(): pass").body)
+        self.assertEqual(_bound_names(ch), {"d", "e", "g"})
+        ch.new_nodes = tuple(ast.parse("from a import *").body)
+        self.assertIsNone(_bound_names(ch))
+        ch.new_nodes = tuple(ast.parse("REG['x'] = 1").body)
+        self.assertIsNone(_bound_names(ch))
 
 
 class TestStateDigest(unittest.TestCase):

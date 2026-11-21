@@ -300,3 +300,39 @@ passing was the largest share (102 s / 62 s). v6 extends T2:
   holdout 636.8 s (v5 669.4), CPU 28.5 (22.1), 0 misses; targeted 455.1 s (470.3), CPU 15.1 (9.4),
   0 misses. Net at board CPU rate ≈ −17 s holdout, −2.5 s targeted.
 - Import-time "state equal ⇒ drop importers" lever measured: ~1 s on holdout, not pursued.
+
+## Board results Sat 8:44–10:00 AM CT: v6 and the tpcds probe
+
+| Receipt | Commit | Score | Simulated | CPU | Misses |
+|---|---|---|---|---|---|
+| BB-0A4A75A1 | `09759be` (v6) | 179.9 s | 175.776 s | 4.09 | 0 |
+| BB-0E108FFD | `dff804c` (probe: v4 minus `test_execute_tpcds`) | 421.8 s | 420.971 s | 0.85 | 1 |
+
+- v6 saved 2.0 s simulated on the board but cost +3.2 s CPU: net worse than v4 (178.7 s stays entered).
+- Probe: `test_execute_tpcds` costs 177.784 − 420.971 + 300 × 1 = **56.8 s** on the board and really
+  fails on exactly **1** board commit. So most of the gap to the leaders (126–131 s) is tpcds kept while
+  passing, on commits v6's replay refused. Leaders: Aqua 126.1, 67 130.7, 1212 135.3 (Sat 10 AM).
+- Second probe ready, not pushed: `6c45c26` on `probe-heavy4` = v4 minus qualify_columns,
+  annotate_funcs, max_nodes, generator_memory (they fail on 4 sample commits, so expect misses; the
+  same formula gives their board waste).
+
+## v7 (Sat ~1 PM CT) — tpcds replay for import-time changes and mixed fixture/test edits (NOT submitted)
+
+Why v6 refused labelled tpcds-passing commits: changed lines or bound names that also run at import
+(dialect class bodies parse SQL templates through the parser), and any patch that also touched a file
+outside `sqlglot/` (sample `986c`, `bvw2`, `rszg` mix code with optimizer fixtures). v7:
+- a changed function line that runs at import, or a binding referenced at import, no longer refuses:
+  the child's `state_check` runs (no names allowed for function lines) and must find every other module
+  and class attribute equal to the pinned import state. Patches that break an import (duckdb in
+  h7_029/h7_034/h11_021/t25_tmpl_000/t24_defarg_001) are still kept: their `:!` entry differs.
+- `replay_ignorable`: other test modules and fixtures outside `tests/fixtures/optimizer/tpc-{h,ds}/`
+  are ignored for the replay (passed to the child as data, so opening one taints).
+- `Change.new_nodes` records statements added at class/module level; `_bound_names` reads them and
+  import bindings (star imports refused). Read only by the replay, so selection is unchanged.
+- Parity (verify-all): holdout 63, targeted 58, sample 13 commits, 0 violations. Seven synthetic
+  commits of the new shapes (code+unrelated fixture, added module helper, added import; tools/ground_truth.py
+  labels): every replay verdict matched the real tpcds outcome, 0 violations.
+- Production image `rwx-v7` (organizer flags, local): sample 103.165 s, CPU 2.52, 0 misses;
+  holdout 636.8 s, CPU 29.6, 0 misses; targeted 440.2 s (v6 455.1), CPU 19.5 (15.1), 0 misses.
+- Board effect unknown until submitted: it depends on whether the board's tpcds commits have these shapes.
+  Each tpcds replay costs ~3 s local CPU (~7 s board) and saves ~15–20 s when the test passes.

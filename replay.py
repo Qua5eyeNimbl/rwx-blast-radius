@@ -23,7 +23,11 @@ reference runs after import -- those references then play the role of the
 changed lines, and `state_check` proves that the patched imports changed no
 other module or class attribute (`flat_state`, pinned at build time) -- or a
 TPC fixture that the class setup loads for the test without using it
-(`fixture_loads`).
+(`fixture_loads`).  Since v7 a changed line or a reference that runs while
+importing is also accepted, under the same state check (with no names allowed
+for function lines): the import may run patched code, but must leave every
+other module and class attribute as pinned.  Files the test never reads
+(other test modules, non-TPC fixtures) are ignored; opening one taints.
 
 Digests are computed by walking object attributes directly, never by calling
 methods of the (possibly patched) sqlglot objects.

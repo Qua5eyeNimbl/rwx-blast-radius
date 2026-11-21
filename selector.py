@@ -291,11 +291,12 @@ class Units:
 
 
 class Change:
-    __slots__ = ("kind", "unit", "lines", "detail", "lambdas", "node", "new_node")
+    __slots__ = ("kind", "unit", "lines", "detail", "lambdas", "node", "new_node", "new_nodes")
 
     def __init__(self, kind, unit, lines, detail="", lambdas=None, node=None):
         self.node = node
         self.new_node = None
+        self.new_nodes = ()       # statements added in place of / next to node (replay only)
         self.kind = kind          # 'function' | 'class' | 'module' | 'defaults'
         self.unit = unit          # qualified unit name
         self.lines = lines        # list of (start, end) base line ranges
@@ -700,7 +701,9 @@ def diff_body(kind, unit, a_body, b_body, parent_hdr, out: list, ctx: _Ctx):
             for a in a_body[i1:i2]:
                 out.append(Change(kind, unit, [_span(a)], "stmt-removed/replaced", node=a))
             if j2 > j1 and kind != "function":
-                out.append(Change(kind, unit, [_span(a) for a in a_body[i1:i2]], "stmt-added"))
+                added = Change(kind, unit, [_span(a) for a in a_body[i1:i2]], "stmt-added")
+                added.new_nodes = tuple(b_body[j1:j2])
+                out.append(added)
         else:
             # pure insertion: whoever executes the neighbours reaches it
             nb = []
@@ -711,6 +714,7 @@ def diff_body(kind, unit, a_body, b_body, parent_hdr, out: list, ctx: _Ctx):
             if not nb and parent_hdr:
                 nb.append(parent_hdr)
             ins = Change(kind, unit, nb, "stmt-inserted")
+            ins.new_nodes = tuple(b_body[j1:j2])
             if kind == "class" and j2 - j1 == 1:
                 ins.new_node = b_body[j1]
             out.append(ins)
@@ -1815,6 +1819,17 @@ FIXTURE_SETUP_ONLY = {"tests/fixtures/optimizer/tpc-h/tpc-h.sql": (_TPCDS,),
                       "tests/fixtures/optimizer/tpc-ds/tpc-ds.sql": _TPCH}
 
 
+def replay_ignorable(rel) -> bool:
+    """A modified file the proxied tests never read or import: other test
+    modules, and fixtures outside the TPC directories TestExecutor loads.
+    (The child taints if one is opened anyway.)"""
+    if not rel or not rel.startswith("tests/") or rel in REPLAY_TEST_FILES:
+        return False
+    if rel.startswith("tests/fixtures/"):
+        return not rel.startswith(("tests/fixtures/optimizer/tpc-h/", "tests/fixtures/optimizer/tpc-ds/"))
+    return rel.endswith(".py")
+
+
 def _replay_cov():
     try:
         with gzip.open(INDEX_DIR / "replay_cov.json.gz", "rt", encoding="utf-8") as fh:
@@ -1827,8 +1842,14 @@ def _bound_names(ch):
     """Names a class/module-level statement change (re)binds, or None when
     it is not a plain binding.  For a signature change: the function name."""
     names = set()
-    for node in (ch.node, ch.new_node):
+    for node in (ch.node, ch.new_node, *ch.new_nodes):
         if node is None:
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for al in node.names:
+                if al.name == "*":
+                    return None
+                names.add(al.asname or al.name.split(".")[0])
             continue
         if isinstance(node, ast.Assign):
             targets = node.targets
@@ -1879,6 +1900,8 @@ def replay_eligible(select, files, proxied_ids, lookup, cov):
             ok = FIXTURE_SETUP_ONLY[rel]
             ids_ok = set(ok) if ids_ok is None else ids_ok & set(ok)
             continue
+        if fd.new == rel and not fd.binary and replay_ignorable(rel):
+            continue
         if not rel or fd.new != rel or not rel.startswith("sqlglot/") or not rel.endswith(".py"):
             return {}, None, ()
         base = src.get(rel)
@@ -1894,7 +1917,9 @@ def replay_eligible(select, files, proxied_ids, lookup, cov):
                 for a, b in ch.lines:
                     _, imods = select.index.line_tests(rel, a, b)
                     if imods:
-                        return {}, None, ()
+                        # runs while importing: the child's state check must
+                        # then find the patched import state unchanged
+                        allowed = allowed or set()
                     spans.append((rel, a, b))
                 continue
             if ch.kind not in ("class", "module", "defaults") or rel.startswith("sqlglot/executor/"):
@@ -1908,9 +1933,9 @@ def replay_eligible(select, files, proxied_ids, lookup, cov):
             for frel, lno in uses:
                 if not frel.startswith("sqlglot/") and (frel in REPLAY_TEST_FILES or not frel.startswith("tests/")):
                     return {}, None, ()  # the proxied tests' own code: not in the coverage
-                _, imods = select.index.line_tests(frel, lno, lno)
-                if imods:
-                    return {}, None, ()  # read while importing: derived state
+                # a use while importing may derive other state from the
+                # names: the child's state check allows only the names
+                # themselves to differ, so derived state must come out equal
                 spans.append((frel, lno, lno))
             allowed = (allowed or set()) | names
 
@@ -1948,7 +1973,10 @@ def verify(chosen, lookup, select=None):
             files = parse_patch(text)
         except ValueError:
             continue
-        patched = runner.patched_sources(files, apply_hunks, FIXTURE_SETUP_ONLY)
+        data_ok = set(FIXTURE_SETUP_ONLY) | {fd.old for fd in files
+                                             if fd.old == fd.new and replay_ignorable(fd.old)
+                                             and not fd.old.endswith(".py")}
+        patched = runner.patched_sources(files, apply_hunks, data_ok)
         if patched is None:
             continue
         proxied = {n for n in ids if n in proxy_kind}
