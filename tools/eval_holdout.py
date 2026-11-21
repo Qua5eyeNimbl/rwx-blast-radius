@@ -9,7 +9,7 @@ tests = {t['number']: t for t in json.load(open(f'{data}/tests.json'))['tests']}
 gt = {}
 for g in gts:
     if os.path.exists(g):
-        gt.update({k: v for k, v in json.load(open(g)).items() if v['status'] in ('exit0', 'exit1') and not v.get('unknown')})
+        gt.update({k: v for k, v in json.load(open(g)).items() if v['status'].split('+')[0] in ('exit0', 'exit1', 'exit2') and not v.get('unknown')})
 def cost(ws):
     ws = [w for w in ws if w]
     return 0 if not ws else (max(sum(round(tests[n]['seconds']*1000) for n in w) for w in ws) + 2000*len(ws))/1000
