@@ -663,6 +663,8 @@ def diff_stmt(kind, unit, a, b, out, ctx: _Ctx):
             else:
                 diff_body(kind, unit, va, vb, hdr, out, ctx)
         return
+    if _inert_string_stmt(a, b):
+        return
     if kind in ("class", "module"):
         lams = _lambda_only(a, b)
         if lams:
@@ -703,10 +705,37 @@ def _unit_span(node):
     return (_start(node), node.end_lineno)
 
 
+def _mark_docstrings(tree):
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and n.body:
+            st = n.body[0]
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
+                st._rwx_doc = True
+
+
+def _inert_string_stmt(a, b) -> bool:
+    """Both statements are bare string expressions whose edit nothing can
+    observe: a string statement that is not a docstring is discarded, and a
+    docstring is only seen through __doc__, which sqlglot reads solely to
+    test for emptiness (doctests are not part of the collected suite)."""
+    if not (isinstance(a, ast.Expr) and isinstance(b, ast.Expr)):
+        return False
+    va, vb = a.value, b.value
+    if not (isinstance(va, ast.Constant) and isinstance(vb, ast.Constant)
+            and isinstance(va.value, str) and isinstance(vb.value, str)):
+        return False
+    da, db = getattr(a, "_rwx_doc", False), getattr(b, "_rwx_doc", False)
+    if da != db:
+        return False
+    return not da or (bool(va.value) and bool(vb.value))
+
+
 def diff_module(base_src: str, new_src: str, hunks=None):
     """Return list[Change] or raise SyntaxError for the new source."""
     ta = ast.parse(base_src)
     tb = ast.parse(new_src)
+    _mark_docstrings(ta)
+    _mark_docstrings(tb)
     if hunks is None:
         a_changed = set(range(1, base_src.count("\n") + 2))
         b_changed = set(range(1, new_src.count("\n") + 2))
@@ -1126,39 +1155,68 @@ class Selector:
         return out
 
     _ast_cache: dict = {}
+    _names_cache: dict = {}
 
     def _tree(self, frel):
         t = self._ast_cache.get(frel)
         if t is None:
-            t = self._ast_cache[frel] = ast.parse(self.index.sources()[frel])
-            for parent in ast.walk(t):
-                for child in ast.iter_child_nodes(parent):
-                    child._rwx_parent = parent
+            self._index_file(frel)
+            t = self._ast_cache[frel]
         return t
-
-    _names_cache: dict = {}
 
     def _named_nodes(self, frel):
         """identifier -> nodes that can mention it (Name, Attribute, str
-        Constant, arg, keyword), in ast.walk order; built once per file."""
+        Constant, arg, keyword); built once per file."""
         d = self._names_cache.get(frel)
         if d is None:
-            d = self._names_cache[frel] = {}
-            for n in ast.walk(self._tree(frel)):
-                if isinstance(n, ast.Name):
-                    k = n.id
-                elif isinstance(n, ast.Attribute):
-                    k = n.attr
-                elif isinstance(n, ast.Constant) and isinstance(n.value, str):
-                    k = n.value
-                elif isinstance(n, ast.arg):
-                    k = n.arg
-                elif isinstance(n, ast.keyword) and n.arg:
-                    k = n.arg
-                else:
-                    continue
-                d.setdefault(k, []).append(n)
+            self._index_file(frel)
+            d = self._names_cache[frel]
         return d
+
+    def _index_file(self, frel):
+        """Parse once; set parent links and build the identifier table in a
+        single pass over the tree."""
+        t = ast.parse(self.index.sources()[frel])
+        d = {}
+        AST, Name, Attribute, Constant, arg, keyword = ast.AST, ast.Name, ast.Attribute, ast.Constant, ast.arg, ast.keyword
+        stack = [t]
+        pop, push = stack.pop, stack.append
+        while stack:
+            node = pop()
+            for f in node._fields:
+                v = getattr(node, f, None)
+                if type(v) is list:
+                    for c in v:
+                        if isinstance(c, AST):
+                            c._rwx_parent = node
+                            push(c)
+                elif isinstance(v, AST):
+                    v._rwx_parent = node
+                    push(v)
+            tp = type(node)
+            if tp is Name:
+                k = node.id
+            elif tp is Attribute:
+                k = node.attr
+            elif tp is Constant:
+                k = node.value
+                if type(k) is not str:
+                    continue
+            elif tp is arg:
+                k = node.arg
+            elif tp is keyword:
+                k = node.arg
+                if not k:
+                    continue
+            else:
+                continue
+            lst = d.get(k)
+            if lst is None:
+                d[k] = [node]
+            else:
+                lst.append(node)
+        self._ast_cache[frel] = t
+        self._names_cache[frel] = d
 
     def _trace_uses(self, start_names, keys_stable=False, every_ref=False):
         ix = self.index

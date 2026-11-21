@@ -6,6 +6,7 @@ Candidates (all inside class bodies of sqlglot/*.py):
   delattr  - a one-line `NAME = <call-free value>` class attribute removed
   insattr  - a bool flag of a base class (Dialect/Tokenizer/Parser/Generator)
              overridden with the opposite value in a subclass that does not set it
+  docstr   - a word inserted into a module/class/function docstring
 
 Only candidates where the new selector and a reference selector disagree are
 kept (the others say nothing about the new rules); a seeded sample is written.
@@ -92,12 +93,22 @@ def main():
                     if nm and isinstance(st.value, ast.Constant) and isinstance(st.value.value, bool):
                         base_flags.setdefault(role, {})[nm] = st.value.value
 
-    cands = {"dictval": [], "delattr": [], "insattr": []}
+    cands = {"dictval": [], "delattr": [], "insattr": [], "docstr": []}
     for rel, text in sorted(src.items()):
         if not rel.startswith("sqlglot/") or not rel.endswith(".py"):
             continue
         lines = text.split("\n")
         tree = ast.parse(text)
+        for d in [tree] + [x for x in ast.walk(tree) if isinstance(x, (ast.ClassDef, ast.FunctionDef))]:
+            st = d.body[0] if d.body else None
+            if (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str)
+                    and st.value.value.strip()):
+                ln = lines[st.lineno - 1]
+                q = '"""' if '"""' in ln else None
+                if q and ln.strip() != q:
+                    new = lines[:]
+                    new[st.lineno - 1] = ln.replace(q, q + "Note: ", 1)
+                    cands["docstr"].append((rel, "\n".join(new), f"{getattr(d, 'name', '<module>')}@{st.lineno}"))
         for c in classes(tree):
             names = {target_name(st) for st in c.body}
             for st in c.body:
@@ -144,7 +155,10 @@ def main():
     rng = random.Random(seed)
     os.makedirs(os.path.join(out_dir, "commits"), exist_ok=True)
     meta = {}
+    only = os.environ.get("TM_KINDS")
     for kind, lst in cands.items():
+        if only and kind not in only.split(","):
+            continue
         rng.shuffle(lst)
         kept = 0
         tried = 0
