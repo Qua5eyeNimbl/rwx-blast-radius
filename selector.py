@@ -617,6 +617,28 @@ def _key_only_use(n) -> bool:
     return _truth_only(n)
 
 
+# entry points that parse SQL text (sqlglot.parse*, exp.maybe_parse, DataType.build, ...)
+_SQL_TEXT_PARSERS = {"parse", "parse_one", "maybe_parse", "parse_identifier", "build", "to_table", "to_column"}
+
+
+def _parsed_literal_change(ch) -> bool:
+    """An import-time statement whose changed literal is an argument of a
+    parse-like call (exp.maybe_parse("..."), parse_one("...")): the new text
+    may not parse, and then importing the module raises."""
+    b = getattr(ch, "new_node", None)
+    if ch.node is None or b is None:
+        return False
+    for tree in (ch.node, b):
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call):
+                f = n.func
+                fname = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+                if fname in _SQL_TEXT_PARSERS and any(
+                        isinstance(a, ast.Constant) and isinstance(a.value, str) for a in n.args):
+                    return True
+    return False
+
+
 def _span(st):
     return (_start(st), getattr(st, "end_lineno", st.lineno))
 
@@ -1182,8 +1204,9 @@ class Selector:
                 if narrowed is not None:
                     return narrowed
         structural = not _literal_only_change(ch)
-        if structural:
-            # anything but a literal/operator tweak can make the import raise
+        if structural or _parsed_literal_change(ch):
+            # anything but a literal/operator tweak can make the import raise,
+            # and so can SQL text parsed while the module imports
             out |= ix.requirers(mod)
         narrowed = None if structural else self._narrow_dict_entry(mod, ch)
         if narrowed is None and not structural:
