@@ -1,0 +1,13 @@
+diff --git a/sqlglot/optimizer/qualify_columns.py b/sqlglot/optimizer/qualify_columns.py
+index 1111111..2222222 100644
+--- a/sqlglot/optimizer/qualify_columns.py
++++ b/sqlglot/optimizer/qualify_columns.py
+@@ -159,7 +159,7 @@
+                 error_msg = f"Column '{column.name}' could not be resolved{for_table}."
+                 if line and col:
+                     error_msg += f" Line: {line}, Col: {col}"
+-                if sql and start is not None and end is not None:
++                if sql and start is None and end is not None:
+                     formatted_sql = highlight_sql(sql, [(start, end)])[0]
+                     error_msg += f"\n  {formatted_sql}"
+ 

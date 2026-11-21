@@ -1,0 +1,12 @@
+diff --git a/sqlglot/optimizer/annotate_types.py b/sqlglot/optimizer/annotate_types.py
+index 1111111..2222222 100644
+--- a/sqlglot/optimizer/annotate_types.py
++++ b/sqlglot/optimizer/annotate_types.py
+@@ -656,7 +656,6 @@
+                 for node in ordered.walk(prune=lambda n: isinstance(n, exp.Subquery)):
+                     if not isinstance(node, (exp.Column, exp.Literal)):
+                         self._visited.pop(id(node), None)
+-                self.annotate_expression(ordered, scope)
+ 
+     def _maybe_coerce(
+         self,

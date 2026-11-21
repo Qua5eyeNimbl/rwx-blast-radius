@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parsers/starrocks.py b/sqlglot/parsers/starrocks.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/starrocks.py
++++ b/sqlglot/parsers/starrocks.py
+@@ -165,7 +165,7 @@
+         # https://docs.starrocks.io/docs/sql-reference/data-types/semi_structured/Map/
+         is_map_literal = (
+             isinstance(this, exp.Column)
+-            and not this.table
++            and this.table
+             and this.name.upper() == "MAP"
+             and self._match(TokenType.L_BRACE, advance=False)
+         )

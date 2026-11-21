@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -5954,7 +5954,7 @@
+         is_nulls_last = self._match_text_seq("NULLS", "LAST")
+ 
+         nulls_first = is_nulls_first or False
+-        explicitly_null_ordered = is_nulls_first or is_nulls_last
++        explicitly_null_ordered = is_nulls_first and is_nulls_last
+ 
+         if (
+             not explicitly_null_ordered

@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -3674,7 +3674,7 @@
+         if self._match_set(self.STATEMENT_PARSERS, advance=False):
+             this = self._parse_statement()
+         else:
+-            this = self._parse_table(schema=True)
++            this = self._parse_table(schema=False)
+ 
+         properties = self._parse_properties()
+         expressions = properties.expressions if properties else None

@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/singlestore.py b/sqlglot/generators/singlestore.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/singlestore.py
++++ b/sqlglot/generators/singlestore.py
+@@ -1431,7 +1431,6 @@
+     def jsonextractscalar_sql(self, expression: exp.JSONExtractScalar) -> str:
+         json_type = expression.args.get("json_type")
+         func_name = "JSON_EXTRACT_JSON" if json_type is None else f"JSON_EXTRACT_{json_type}"
+-        return json_extract_segments(func_name)(self, expression)
+ 
+     def jsonbextractscalar_sql(self, expression: exp.JSONBExtractScalar) -> str:
+         json_type = expression.args.get("json_type")

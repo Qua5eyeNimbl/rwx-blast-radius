@@ -1,0 +1,25 @@
+diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/dialect.py
++++ b/sqlglot/dialects/dialect.py
+@@ -1996,6 +1996,7 @@
+     return _timestamptrunc_sql
+ 
+ 
++# Fast path
+ def no_timestamp_sql(self: Generator, expression: exp.Timestamp) -> str:
+     zone = expression.args.get("zone")
+     if not zone:
+diff --git a/tests/fixtures/optimizer/normalize_identifiers.sql b/tests/fixtures/optimizer/normalize_identifiers.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/normalize_identifiers.sql
++++ b/tests/fixtures/optimizer/normalize_identifiers.sql
+@@ -86,7 +86,7 @@
+ # title: duckdb only normalizes ascii characters
+ # dialect: duckdb
+ SELECT "FoÄ" FROM "BaÜ";
+-SELECT "foÄ" FROM "baÜ";
++SELECT "foÄ" x FROM "baÜ";
+ 
+ # title: postgres only normalizes ascii characters
+ # dialect: postgres

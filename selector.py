@@ -1,160 +1,1237 @@
-"""RWX Blast Radius: patch-aware conservative test selector.
+"""RWX Blast Radius selector, v2.
 
-The decision is derived from changed paths and test IDs, not from provided
-sample answers or any precomputed patch->test lookup. No third-party packages.
+For every patch in /data/commits, print one JSON line {"commit", "workers"}.
 
-The next phase can replace the conservative file-level groups with a coverage
-index computed from the competition's pinned sqlglot revision at Docker build.
+Evidence comes only from an index built offline from the *pinned, unmodified*
+sqlglot checkout (see tools/): per-test line coverage with import/collection
+contexts separated, files each test read, and sqlglot classes each test
+instantiated.  The selector never sees sample answers, and contains no table
+keyed by patch, commit id or edit kind.
+
+Selection rule, per changed unit (decided by AST comparison, not by text):
+  * AST-identical file (comments/whitespace only)  -> no tests from that file
+  * statement inside a function/lambda changed     -> tests that executed that
+    statement in the pinned run (a test that never executes a statement
+    cannot observe a change to it)
+  * import-time statement (module or class body)   -> tests that use the
+    module/class (instantiated it or a subclass, ran its code, or a module
+    that imports it)
+  * data file (fixtures etc.)                      -> tests that read it
+Anything that cannot be analysed falls back to a broad, safe selection.
+stdout carries only the JSON lines; diagnostics go to stderr.
 """
 
 from __future__ import annotations
 
+import ast
+import difflib
+import gzip
 import json
 import os
 import re
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 DATA = Path(os.environ.get("RWX_DATA", "/data"))
+HERE = Path(__file__).resolve().parent
+INDEX_DIR = Path(os.environ.get("RWX_INDEX", HERE / "index"))
 MAX_WORKERS = 8
+WORKER_COST_MS = 2000
+DEBUG = os.environ.get("RWX_DEBUG") == "1"
 
 
-def parse_changed_paths(patch: str) -> set[str]:
-    """Read paths from Git's unified patch, handling /dev/null and rename."""
-    paths = set()
-    for line in patch.splitlines():
-        if line.startswith(("--- a/", "+++ b/")):
-            paths.add(line[6:].split("\t", 1)[0])
-        elif line.startswith(("rename from ", "rename to ")):
-            paths.add(line.split(" ", 2)[-1])
-    return paths
+def log(*a):
+    if DEBUG:
+        print(*a, file=sys.stderr)
 
 
-def schedule(ids: set[int], lookup: dict[int, dict]) -> list[list[int]]:
-    """LPT scheduling; choose worker count to minimize max load + 2s/worker."""
-    if not ids:
-        return []
-    ordered = sorted(ids, key=lambda n: (-round(lookup[n]["seconds"] * 1000), n))
-    best_plan, best_cost = None, None
-    for count in range(1, min(MAX_WORKERS, len(ids)) + 1):
-        buckets = [[] for _ in range(count)]
-        loads = [0] * count
-        for n in ordered:
-            worker = min(range(count), key=lambda w: (loads[w], w))
-            buckets[worker].append(n)
-            loads[worker] += round(lookup[n]["seconds"] * 1000)
-        cost = max(loads) + 2000 * count
-        if best_cost is None or cost < best_cost:
-            best_cost = cost
-            best_plan = buckets
-    return best_plan or []
+# ===================================================================== patches
+class FileDiff:
+    __slots__ = ("old", "new", "hunks", "binary")
+
+    def __init__(self):
+        self.old = None
+        self.new = None
+        self.hunks = []  # (old_start, old_len, new_start, new_len, [lines])
+        self.binary = False
+
+    @property
+    def path(self):
+        return self.old if self.old is not None else self.new
 
 
+_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _clean_path(p: str) -> str | None:
+    p = p.rstrip("\r\n")
+    if "\t" in p:
+        p = p.split("\t", 1)[0]
+    if p.startswith('"') and p.endswith('"') and len(p) >= 2:
+        try:
+            p = p[1:-1].encode("latin-1", "backslashreplace").decode("unicode_escape").encode("latin-1").decode("utf-8")
+        except Exception:
+            p = p[1:-1]
+    if p == "/dev/null":
+        return None
+    if p[:2] in ("a/", "b/"):
+        p = p[2:]
+    return p
+
+
+def parse_patch(text: str) -> list[FileDiff]:
+    """Parse a git unified diff. Raises ValueError when nothing is recognisable."""
+    files: list[FileDiff] = []
+    cur: FileDiff | None = None
+    hunk = None
+    lines = text.split("\n")
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].rstrip("\r")
+        if line.startswith("diff --git "):
+            cur = FileDiff()
+            files.append(cur)
+            hunk = None
+            m = re.match(r'^diff --git (?:"?a/(.+?)"?) (?:"?b/(.+?)"?)$', line)
+            if m:
+                cur.old, cur.new = m.group(1), m.group(2)
+        elif cur is not None and hunk is None and line.startswith("--- "):
+            cur.old = _clean_path(line[4:])
+        elif cur is not None and hunk is None and line.startswith("+++ "):
+            cur.new = _clean_path(line[4:])
+        elif cur is not None and line.startswith("new file mode"):
+            cur.old = None
+        elif cur is not None and line.startswith("deleted file mode"):
+            cur.new = None
+        elif cur is not None and line.startswith("rename from "):
+            cur.old = line[12:]
+        elif cur is not None and line.startswith("rename to "):
+            cur.new = line[10:]
+        elif cur is not None and (line.startswith("Binary files") or line.startswith("GIT binary patch")):
+            cur.binary = True
+        elif cur is not None and line.startswith("@@"):
+            m = _HUNK.match(line)
+            if not m:
+                raise ValueError("bad hunk header")
+            os_, ol, ns, nl = m.groups()
+            ol = 1 if ol is None else int(ol)
+            nl = 1 if nl is None else int(nl)
+            hunk = (int(os_), ol, int(ns), nl, [])
+            cur.hunks.append(hunk)
+            # consume exactly the declared number of lines
+            need_old, need_new = ol, nl
+            i += 1
+            while i < n and (need_old > 0 or need_new > 0):
+                hl = lines[i]
+                tag = hl[:1]
+                if tag == " " or (hl == "" and need_old > 0 and need_new > 0):
+                    hunk[4].append(" " + hl[1:])
+                    need_old -= 1
+                    need_new -= 1
+                elif tag == "-":
+                    hunk[4].append(hl)
+                    need_old -= 1
+                elif tag == "+":
+                    hunk[4].append(hl)
+                    need_new -= 1
+                elif tag == "\\":
+                    pass
+                else:
+                    raise ValueError("truncated hunk")
+                i += 1
+            while i < n and lines[i].startswith("\\"):
+                hunk[4].append(lines[i])
+                i += 1
+            continue
+        i += 1
+    if not files:
+        raise ValueError("no files in patch")
+    return files
+
+
+def apply_hunks(base: str, hunks) -> str:
+    """Apply hunks to base text; raise ValueError on context mismatch."""
+    src = base.split("\n")
+    out: list[str] = []
+    pos = 0  # 0-based index into src
+    for old_start, old_len, _ns, _nl, body in hunks:
+        start = old_start - 1 if old_len > 0 else old_start
+        if start < pos or start > len(src):
+            raise ValueError("hunk out of range")
+        out.extend(src[pos:start])
+        pos = start
+        no_newline_after_new = False
+        for idx, hl in enumerate(body):
+            tag = hl[:1]
+            if tag == "\\":
+                prev = body[idx - 1][:1] if idx else ""
+                if prev in ("+", " "):
+                    no_newline_after_new = True
+                continue
+            if tag in (" ", "-"):
+                if pos >= len(src) or src[pos].rstrip("\r") != hl[1:].rstrip("\r"):
+                    raise ValueError("context mismatch")
+                if tag == " ":
+                    out.append(src[pos])
+                pos += 1
+            elif tag == "+":
+                out.append(hl[1:])
+        del no_newline_after_new
+    out.extend(src[pos:])
+    return "\n".join(out)
+
+
+# ===================================================================== AST diff
+_COMPOUND_BODIES = ("body", "orelse", "finalbody", "handlers", "cases")
+
+
+def _dump(node) -> str:
+    return ast.dump(node, include_attributes=False)
+
+
+def _header_dump(node) -> str:
+    """Dump of a statement with nested statement bodies removed."""
+    parts = [type(node).__name__]
+    for f, v in ast.iter_fields(node):
+        if f in _COMPOUND_BODIES:
+            continue
+        if isinstance(v, list):
+            parts.append(f + "=[" + ",".join(_dump(x) if isinstance(x, ast.AST) else repr(x) for x in v) + "]")
+        elif isinstance(v, ast.AST):
+            parts.append(f + "=" + _dump(v))
+        else:
+            parts.append(f + "=" + repr(v))
+    return "|".join(parts)
+
+
+def _shallow(node) -> str:
+    """Statement dump where function and class bodies are opaque (they are
+    separate units), so a change inside a method does not mark the class body."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return "DEF:" + _header_dump(node)
+    return _dump(node)
+
+
+def _header_end(node) -> int:
+    """Last line of a compound statement's header."""
+    first_body = None
+    for f in _COMPOUND_BODIES:
+        v = getattr(node, f, None)
+        if v:
+            ln = v[0].lineno if not isinstance(v[0], ast.match_case) else v[0].pattern.lineno
+            if hasattr(v[0], "decorator_list") and v[0].decorator_list:
+                ln = min(ln, v[0].decorator_list[0].lineno)
+            first_body = ln if first_body is None else min(first_body, ln)
+    if first_body is None:
+        return getattr(node, "end_lineno", node.lineno)
+    return max(node.lineno, first_body - 1)
+
+
+def _start(node) -> int:
+    ln = node.lineno
+    for d in getattr(node, "decorator_list", ()) or ():
+        ln = min(ln, d.lineno)
+    return ln
+
+
+class Units:
+    """Split a module into units. scope units: module and class bodies
+    (executed at import); function units: function bodies (executed when
+    called)."""
+
+    def __init__(self, tree: ast.Module):
+        self.units: dict[str, tuple[str, list, ast.AST]] = {}
+        self._walk(tree.body, "", "module", tree)
+
+    def _add(self, qual, kind, body, node):
+        k = qual
+        j = 1
+        while k in self.units:
+            j += 1
+            k = f"{qual}#{j}"
+        self.units[k] = (kind, body, node)
+        return k
+
+    def _walk(self, body, qual, kind, node):
+        self._add(qual or "<module>", kind, body, node)
+        self._children(body, qual, kind)
+
+    def _children(self, body, qual, kind):
+        for st in body:
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                q = f"{qual}.{st.name}" if qual else st.name
+                self._add(q, "function", st.body, st)
+                self._children(st.body, q, "function")
+            elif isinstance(st, ast.ClassDef):
+                q = f"{qual}.{st.name}" if qual else st.name
+                if kind == "function":
+                    # classes created inside a function run when it runs
+                    self._add(q, "function", st.body, st)
+                else:
+                    self._add(q, "class", st.body, st)
+                self._children(st.body, q, "function" if kind == "function" else "class")
+            else:
+                for f in _COMPOUND_BODIES:
+                    sub = getattr(st, f, None)
+                    if sub:
+                        stmts = [c for c in sub if isinstance(c, ast.stmt)]
+                        if f == "handlers":
+                            for h in sub:
+                                self._children(h.body, qual, kind)
+                        elif f == "cases":
+                            for c in sub:
+                                self._children(c.body, qual, kind)
+                        else:
+                            self._children(stmts, qual, kind)
+
+
+class Change:
+    __slots__ = ("kind", "unit", "lines", "detail", "lambdas", "node", "new_node")
+
+    def __init__(self, kind, unit, lines, detail="", lambdas=None, node=None):
+        self.node = node
+        self.new_node = None
+        self.kind = kind          # 'function' | 'class' | 'module' | 'defaults'
+        self.unit = unit          # qualified unit name
+        self.lines = lines        # list of (start, end) base line ranges
+        self.detail = detail
+        self.lambdas = lambdas    # for scope statements whose diff is inside lambdas
+
+    def __repr__(self):
+        return f"Change({self.kind},{self.unit},{self.lines},{self.detail})"
+
+
+def _minimal_diffs(a, b, path=()):
+    """Yield (node_in_a or None, path) for minimal differing subtrees."""
+    if type(a) is not type(b):
+        yield a, path
+        return
+    if isinstance(a, ast.AST):
+        for f, va in ast.iter_fields(a):
+            vb = getattr(b, f, None)
+            yield from _minimal_diffs_field(va, vb, a, path + ((a, f),))
+        return
+    if a != b:
+        yield None, path
+
+
+def _minimal_diffs_field(va, vb, parent, path):
+    if isinstance(va, list) and isinstance(vb, list):
+        if len(va) != len(vb):
+            yield parent, path
+            return
+        for x, y in zip(va, vb):
+            if isinstance(x, ast.AST) or isinstance(y, ast.AST):
+                if not (isinstance(x, ast.AST) and isinstance(y, ast.AST) and _dump(x) == _dump(y)):
+                    yield from _minimal_diffs(x, y, path)
+            elif x != y:
+                yield parent, path
+        return
+    if isinstance(va, ast.AST) and isinstance(vb, ast.AST):
+        if _dump(va) != _dump(vb):
+            yield from _minimal_diffs(va, vb, path)
+        return
+    if va != vb:
+        yield parent, path
+
+
+def _lambda_only(a, b):
+    """If every difference between statements a and b is inside lambda
+    bodies, return those lambdas (from a); otherwise None."""
+    lams = []
+    for node, path in _minimal_diffs(a, b):
+        lam = None
+        for anc, field in path:
+            if isinstance(anc, ast.Lambda) and field == "body":
+                lam = anc
+                break
+        if lam is None:
+            return None
+        lams.append(lam)
+    return lams or None
+
+
+_ENUM_CLASSES = None
+_ENUM_RE = re.compile(r"^\s*class\s+(\w+)\s*\(([^)]*)\)", re.M)
+
+
+def enum_classes() -> set:
+    global _ENUM_CLASSES
+    if _ENUM_CLASSES is None:
+        names = set()
+        src = _SOURCES_FOR_ENUMS() or {}
+        bases = {}
+        for text in src.values():
+            for m in _ENUM_RE.finditer(text):
+                bases[m.group(1)] = [b.strip().split(".")[-1] for b in m.group(2).split(",")]
+        roots = {"Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"}
+        changed = True
+        while changed:
+            changed = False
+            for c, bs in bases.items():
+                if c not in names and any(b in roots or b in names for b in bs):
+                    names.add(c)
+                    changed = True
+        _ENUM_CLASSES = names
+    return _ENUM_CLASSES
+
+
+_SOURCES_FOR_ENUMS = lambda: None  # set by Selector
+
+
+def _is_singleton_operand(node) -> bool:
+    if isinstance(node, ast.Constant) and node.value is None:
+        return True
+    if isinstance(node, ast.Attribute):
+        base = node.value
+        name = base.id if isinstance(base, ast.Name) else base.attr if isinstance(base, ast.Attribute) else None
+        return name is not None and name in enum_classes()
+    return False
+
+
+class _IsToEq(ast.NodeTransformer):
+    """`x is None` == `x == None` and `x is E.M` == `x == E.M` for objects whose
+    __eq__ is identity-like (None, Enum members)."""
+
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        ops = []
+        operands = [node.left] + list(node.comparators)
+        for i, op in enumerate(node.ops):
+            if isinstance(op, (ast.Is, ast.IsNot)) and (
+                _is_singleton_operand(operands[i]) or _is_singleton_operand(operands[i + 1])
+            ):
+                op = ast.Eq() if isinstance(op, ast.Is) else ast.NotEq()
+            ops.append(op)
+        node.ops = ops
+        return node
+
+
+def _normalised(node) -> str:
+    import copy
+
+    return _dump(_IsToEq().visit(copy.deepcopy(node)))
+
+
+def _equivalent_stmt(a, b) -> bool:
+    try:
+        return _normalised(a) == _normalised(b)
+    except Exception:
+        return False
+
+
+def _equivalent_header(a, b) -> bool:
+    try:
+        import copy
+
+        a2, b2 = copy.copy(a), copy.copy(b)
+        for f in _COMPOUND_BODIES:
+            if hasattr(a2, f):
+                setattr(a2, f, [])
+                setattr(b2, f, [])
+        return _normalised(a2) == _normalised(b2)
+    except Exception:
+        return False
+
+
+_LITERAL_NODES = (ast.Constant, ast.operator, ast.cmpop, ast.boolop, ast.unaryop)
+
+
+def _literal_only_change(ch) -> bool:
+    """True when a changed import-time statement differs from its new version
+    only in literals or operators (values change, structure does not)."""
+    if ch.detail != "stmt" or ch.node is None or getattr(ch, "lambdas", None) is not None:
+        return False
+    b = getattr(ch, "new_node", None)
+    if b is None:
+        return False
+    for node, path in _minimal_diffs(ch.node, b):
+        if node is None:
+            if not path or not isinstance(path[-1][0], ast.Constant):
+                return False
+        elif not isinstance(node, _LITERAL_NODES):
+            return False
+    return True
+
+
+def _span(st):
+    return (_start(st), getattr(st, "end_lineno", st.lineno))
+
+
+class _Ctx:
+    """Line-level knowledge from the patch: statements that do not touch a
+    changed line are keyed by their exact text (cheap), touched ones by AST."""
+
+    def __init__(self, a_src, b_src, a_changed, b_changed):
+        self.a_lines = a_src.split("\n")
+        self.b_lines = b_src.split("\n")
+        self.a_changed = a_changed
+        self.b_changed = b_changed
+
+    def key(self, st, side):
+        start, end = _span(st)
+        changed = self.a_changed if side == "a" else self.b_changed
+        lines = self.a_lines if side == "a" else self.b_lines
+        if any(ln in changed for ln in range(start, end + 1)):
+            return _shallow(st)
+        return "T:" + "\n".join(lines[start - 1:end])
+
+    def keys(self, body, side):
+        return [self.key(st, side) for st in body]
+
+
+def diff_body(kind, unit, a_body, b_body, parent_hdr, out: list, ctx: _Ctx):
+    """Compare two statement lists (one unit).  Function/class definitions
+    are compared by header only (their bodies are separate units)."""
+    a_keys = ctx.keys(a_body, "a")
+    b_keys = ctx.keys(b_body, "b")
+    if a_keys == b_keys:
+        return
+    sm = difflib.SequenceMatcher(None, a_keys, b_keys, autojunk=False)
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            continue
+        if op == "replace" and (i2 - i1) == (j2 - j1):
+            for a, b in zip(a_body[i1:i2], b_body[j1:j2]):
+                diff_stmt(kind, unit, a, b, out, ctx)
+            continue
+        if i2 > i1:
+            for a in a_body[i1:i2]:
+                out.append(Change(kind, unit, [_span(a)], "stmt-removed/replaced", node=a))
+            if j2 > j1 and kind != "function":
+                out.append(Change(kind, unit, [_span(a) for a in a_body[i1:i2]], "stmt-added"))
+        else:
+            # pure insertion: whoever executes the neighbours reaches it
+            nb = []
+            if i1 > 0:
+                nb.append(_span(a_body[i1 - 1]))
+            if i1 < len(a_body):
+                nb.append(_span(a_body[i1]))
+            if not nb and parent_hdr:
+                nb.append(parent_hdr)
+            out.append(Change(kind, unit, nb, "stmt-inserted"))
+
+
+def diff_stmt(kind, unit, a, b, out, ctx: _Ctx):
+    if type(a) is type(b) and _dump(a) == _dump(b):
+        return
+    if isinstance(a, (ast.FunctionDef, ast.AsyncFunctionDef)) and type(a) is type(b):
+        if _header_dump(a) == _header_dump(b):
+            return  # body differs: handled as its own unit
+        same_decorators = [_dump(d) for d in a.decorator_list] == [_dump(d) for d in b.decorator_list]
+        if same_decorators and a.name == b.name:
+            # defaults/annotations changed: only callers can observe it
+            out.append(Change("defaults", unit + ("." if unit else "") + a.name, [_span(a)], "signature"))
+            if kind == "function":
+                out.append(Change(kind, unit, [(_start(a), a.body[0].lineno - 1 if a.body else a.lineno)], "nested-def"))
+            return
+        out.append(Change(kind, unit, [_span(a)], "def-header", node=a))
+        return
+    if isinstance(a, ast.ClassDef) and isinstance(b, ast.ClassDef):
+        if _header_dump(a) == _header_dump(b):
+            return
+        out.append(Change(kind, unit, [_span(a)], "class-header", node=a))
+        return
+    compound = any(getattr(a, f, None) for f in _COMPOUND_BODIES)
+    if compound and type(a) is type(b):
+        hdr = (a.lineno, _header_end(a))
+        if _header_dump(a) != _header_dump(b) and not _equivalent_header(a, b):
+            out.append(Change(kind, unit, [hdr], "header"))
+        for f in _COMPOUND_BODIES:
+            va, vb = getattr(a, f, None) or [], getattr(b, f, None) or []
+            if f == "handlers" or f == "cases":
+                if len(va) != len(vb):
+                    out.append(Change(kind, unit, [_span(a)], f))
+                    continue
+                for ha, hb in zip(va, vb):
+                    if f == "handlers":
+                        ha_key = _dump(ha.type) if ha.type else ""
+                        hb_key = _dump(hb.type) if hb.type else ""
+                        if ha_key != hb_key or ha.name != hb.name:
+                            out.append(Change(kind, unit, [(ha.lineno, ha.lineno)], "handler"))
+                    else:
+                        if _dump(ha.pattern) != _dump(hb.pattern) or _dump(ha.guard or ast.Pass()) != _dump(hb.guard or ast.Pass()):
+                            out.append(Change(kind, unit, [(ha.pattern.lineno, ha.pattern.end_lineno)], "case"))
+                    diff_body(kind, unit, ha.body, hb.body, (ha.lineno, ha.lineno) if f == "handlers" else hdr, out, ctx)
+            else:
+                diff_body(kind, unit, va, vb, hdr, out, ctx)
+        return
+    if kind in ("class", "module"):
+        lams = _lambda_only(a, b)
+        if lams:
+            out.append(Change("function", unit, [(l.body.lineno, l.body.end_lineno) for l in lams], "lambda", lams))
+            return
+    if _equivalent_stmt(a, b):
+        return
+    ch = Change(kind, unit, [_span(a)], "stmt", node=a)
+    ch.new_node = b
+    out.append(ch)
+
+
+def changed_lines(hunks):
+    """Base-side and new-side line numbers touched by the hunks.  Insertion
+    points mark the neighbouring lines on the base side."""
+    a_changed, b_changed = set(), set()
+    for os_, _ol, ns, _nl, body in hunks:
+        a, b = os_, ns
+        for hl in body:
+            tag = hl[:1]
+            if tag == " ":
+                a += 1
+                b += 1
+            elif tag == "-":
+                a_changed.add(a)
+                a += 1
+            elif tag == "+":
+                b_changed.add(b)
+                a_changed.add(a - 1)
+                a_changed.add(a)
+                b += 1
+    return a_changed, b_changed
+
+
+def _unit_span(node):
+    if isinstance(node, ast.Module):
+        return (1, 10 ** 9)
+    return (_start(node), node.end_lineno)
+
+
+def diff_module(base_src: str, new_src: str, hunks=None):
+    """Return list[Change] or raise SyntaxError for the new source."""
+    ta = ast.parse(base_src)
+    tb = ast.parse(new_src)
+    if hunks is None:
+        a_changed = set(range(1, base_src.count("\n") + 2))
+        b_changed = set(range(1, new_src.count("\n") + 2))
+    else:
+        a_changed, b_changed = changed_lines(hunks)
+    ctx = _Ctx(base_src, new_src, a_changed, b_changed)
+    ua, ub = Units(ta).units, Units(tb).units
+    out: list[Change] = []
+    for q, (kind, body, node) in ua.items():
+        lo, hi = _unit_span(node)
+        if not any(lo <= ln <= hi for ln in a_changed):
+            continue
+        if q not in ub:
+            continue  # removed unit: its def statement shows up in the parent scope
+        kb, bodyb, nodeb = ub[q]
+        hdr = None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            hdr = (_start(node), node.body[0].lineno - 1 if node.body else node.lineno)
+        diff_body(kind, q, body, bodyb, hdr, out, ctx)
+    return out
+
+
+# ===================================================================== index
+class Index:
+    def __init__(self, tests: list[dict], directory: Path):
+        with gzip.open(directory / "index.json.gz", "rt", encoding="utf-8") as fh:
+            ix = json.load(fh)
+        self.ix = ix
+        number = {t["id"]: t["number"] for t in tests}
+        # index test position -> test number in this run (None if absent)
+        self.pos2num = [number.get(tid) for tid in ix["tests"]]
+        self.sets = ix["sets"]
+        self.mods = ix["mods"]
+        self.lines = ix["lines"]
+        self._set_cache: dict[int, frozenset] = {}
+        self._sources = None
+        self.directory = directory
+        self.mod_files = {}
+        for rel in ix["file_runtime"]:
+            if rel.endswith(".py"):
+                self.mod_files[self.module_name(rel)] = rel
+
+    @staticmethod
+    def module_name(rel: str) -> str:
+        m = rel[:-3].replace("/", ".")
+        if m.endswith(".__init__"):
+            m = m[: -len(".__init__")]
+        return m
+
+    def sources(self):
+        if self._sources is None:
+            with gzip.open(self.directory / "source.json.gz", "rt", encoding="utf-8") as fh:
+                self._sources = json.load(fh)
+        return self._sources
+
+    def tset(self, set_id: int) -> frozenset:
+        s = self._set_cache.get(set_id)
+        if s is None:
+            s = self._set_cache[set_id] = frozenset(
+                n for n in (self.pos2num[p] for p in self.sets[set_id]) if n is not None)
+        return s
+
+    def line_tests(self, rel: str, start: int, end: int):
+        """(tests, import modules) of lines start..end of a file."""
+        fl = self.lines.get(rel)
+        tests, imods = set(), set()
+        if not fl:
+            return tests, imods
+        for ln in range(start, end + 1):
+            e = fl.get(str(ln))
+            if e:
+                tests |= self.tset(e[0])
+                imods.update(self.mods[e[1]])
+        return tests, imods
+
+    def readers(self, rel: str) -> set:
+        out = set()
+        sid = self.ix["reads"].get(rel)
+        if sid is not None:
+            out |= self.tset(sid)
+        mid = self.ix["reads_mods"].get(rel)
+        if mid is not None:
+            for m in self.mods[mid]:
+                out |= self.module_users(m, deep=True)
+        return out
+
+    def class_users(self, module: str, qual: str) -> set:
+        sid = self.ix["cls_users"].get(f"{module}:{qual}")
+        return set(self.tset(sid)) if sid is not None else set()
+
+    def classes_in(self, module: str):
+        pre = module + ":"
+        return [k for k in self.ix["cls_users"] if k.startswith(pre)]
+
+    def module_users(self, module: str, deep: bool = False, _seen=None) -> set:
+        """Tests that use a module: ran its code, instantiated its classes,
+        and (deep) the same for modules that import it."""
+        if _seen is None:
+            _seen = set()
+        if module in _seen:
+            return set()
+        _seen.add(module)
+        out = set()
+        rel = self.mod_files.get(module)
+        if rel is not None:
+            out |= self.tset(self.ix["file_runtime"][rel])
+        for k in self.classes_in(module):
+            out |= self.tset(self.ix["cls_users"][k])
+        for f in self.ix["collect_imports"].get(module, ()):
+            out |= self.file_tests(f)
+        if deep:
+            for imp in self.ix["importers"].get(module, ()):
+                out |= self.module_users(imp, True, _seen)
+        return out
+
+    def requirers(self, module: str) -> set:
+        """Tests that (transitively) import the module, even from cache: if
+        importing it raises, all of them fail."""
+        sid = self.ix.get("requirers", {}).get(module)
+        return set(self.tset(sid)) if sid is not None else set()
+
+    def file_tests(self, test_file: str) -> set:
+        sid = self.ix["file_runtime"].get(test_file)
+        return set(self.tset(sid)) if sid is not None else set()
+
+
+# ===================================================================== selector
 class Selector:
-    def __init__(self, tests: list[dict]):
+    def __init__(self, tests: list[dict], index_dir: Path = INDEX_DIR):
         self.tests = tests
         self.by_number = {t["number"]: t for t in tests}
-        self.by_file = defaultdict(set)
-        for t in tests:
-            self.by_file[t["file"]].add(t["number"])
         self.all_ids = set(self.by_number)
-        self.optimizer = self.by_file["tests/test_optimizer.py"]
-        self.dialect_base = self.by_file["tests/dialects/test_dialect.py"]
-        # Generic parser coverage excludes a stress test measuring ~29s;
-        # dedicated core parser changes still select all tests.
-        self.parser_fast = {n for n in self.by_file["tests/test_parser.py"]
-                            if not self.by_number[n]["id"].endswith("::test_max_nodes")}
-        self.general_dialect = (
-            self.dialect_base |
-            self.by_file["tests/test_transpile.py"] |
-            self.by_file["tests/test_generator.py"]
-        )
+        self.by_file: dict[str, set] = {}
+        for t in tests:
+            self.by_file.setdefault(t["file"], set()).add(t["number"])
+        self.index = Index(tests, index_dir)
+        global _SOURCES_FOR_ENUMS
+        _SOURCES_FOR_ENUMS = self.index.sources
 
-    def ids_for_name(self, file: str, name: str) -> set[int]:
-        prefix = f"test_{name}"
-        return {t["number"] for t in self.tests if t["file"] == file and
-                t["id"].split("::")[-1] == prefix}
+    # ------------------------------------------------------------ fallbacks
+    def broad_for_path(self, rel: str) -> set:
+        """Safe answer when a file cannot be analysed."""
+        ix = self.index
+        if rel.endswith(".py"):
+            mod = ix.module_name(rel)
+            users = ix.module_users(mod, deep=True) | ix.readers(rel) | ix.requirers(mod)
+            if rel.startswith("tests/") and rel in self.by_file:
+                users |= self.by_file[rel]
+            return users or set(self.all_ids)
+        return set(self.all_ids)
 
-    def fixture_tests(self, path: str) -> set[int]:
-        """Infer tests from fixture names, as defined by the pinned suite naming."""
-        parts = Path(path).parts
-        if len(parts) < 3:
-            return self.all_ids
-        stem = Path(path).stem
-        if "optimizer" in parts:
-            file = "tests/test_optimizer.py"
-            names = [stem]
-            if stem.endswith("s"):
-                names.append(stem[:-1])
-            if stem.endswith("_projection"):
-                names.append(stem + "s")
-            if stem.endswith("_projections"):
-                names.append(stem[:-1])
-            ids = set().union(*(self.ids_for_name(file, name) for name in names))
-            return ids or self.optimizer
-        if "dialects" in parts:
-            file = f"tests/dialects/test_{stem}.py"
-            return self.by_file.get(file) or self.general_dialect
-        if "executor" in parts:
-            return self.by_file["tests/test_executor.py"]
-        return self.all_ids
+    # ------------------------------------------------------------ python
+    def python_change(self, rel: str, fd: FileDiff, reasons: list) -> set:
+        ix = self.index
+        src = ix.sources()
+        base = src.get(fd.old) if fd.old else None
+        mod = ix.module_name(rel)
+        sel = set()
+        if fd.new is None:  # deleted module
+            reasons.append(f"deleted:{rel}")
+            return self.broad_for_path(rel)
+        if base is None:
+            if fd.old is not None:
+                reasons.append(f"unknown-base:{rel}")
+                return self.broad_for_path(rel)
+            # brand new file: only code that discovers files can see it
+            parent = rel.rsplit("/", 1)[0]
+            reasons.append(f"new-file:{rel}")
+            return ix.readers(parent) | ix.readers(rel)
+        try:
+            new_src = apply_hunks(base, fd.hunks)
+        except ValueError:
+            reasons.append(f"apply-failed:{rel}")
+            return self.broad_for_path(rel)
+        if fd.old != fd.new:  # rename: module path changes, importers break
+            reasons.append(f"rename:{rel}")
+            return self.broad_for_path(rel) | self.broad_for_path(fd.new) if fd.new.endswith(".py") else self.broad_for_path(rel)
+        try:
+            changes = diff_module(base, new_src, fd.hunks)
+        except SyntaxError:
+            reasons.append(f"syntax-error:{rel}")
+            return self.broad_for_path(rel)
+        if base != new_src:
+            sel |= ix.readers(rel)  # tests reading the source text itself
+        if not changes:
+            reasons.append(f"ast-equal:{rel}")
+            return sel
+        for ch in changes:
+            got = self._change_tests(rel, mod, ch)
+            reasons.append(f"{ch.kind}:{ch.unit}:{ch.detail}:{len(got)}")
+            sel |= got
+        return sel
 
-    def dialect_file(self, name: str) -> set[int]:
-        # Some dialects have no individual test file; route to base tests then.
-        return set(self.by_file.get(f"tests/dialects/test_{name}.py", set()))
+    def _change_tests(self, rel, mod, ch: Change) -> set:
+        ix = self.index
+        out = set()
+        if ch.kind == "function":
+            for a, b in ch.lines:
+                ts, imods = ix.line_tests(rel, a, b)
+                out |= ts
+                if ch.detail == "lambda":
+                    # the lambda's lines are shared with the statement that
+                    # creates it at import; its body only runs when called
+                    imods = {m for m in imods if m != mod}
+                for m in imods:  # this code also runs while some module imports:
+                    # a raise there breaks every importer
+                    out |= ix.module_users(m, deep=True) | ix.requirers(m)
+            return out
+        if ch.kind == "defaults":
+            # only calls of this function see new defaults/annotations
+            for a, b in ch.lines:
+                ts, imods = ix.line_tests(rel, a, b)
+                out |= ts
+                for m in imods:
+                    if m != mod:
+                        out |= ix.module_users(m, deep=True)
+            return out
+        structural = not _literal_only_change(ch)
+        if structural:
+            # anything but a literal/operator tweak can make the import raise
+            out |= ix.requirers(mod)
+        narrowed = None if structural else self._narrow_dict_entry(mod, ch)
+        if narrowed is None and not structural:
+            narrowed = self._narrow_by_name(rel, mod, ch)
+        if narrowed is not None:
+            return narrowed
+        # import-time statement in a class or module body
+        for a, b in ch.lines:
+            ts, imods = ix.line_tests(rel, a, b)
+            out |= ts
+            for m in imods:
+                if m != mod:
+                    out |= ix.module_users(m, deep=True)
+                    if structural:
+                        out |= ix.requirers(m)
+        if ch.kind == "class":
+            q = ch.unit.split("#", 1)[0]
+            out |= ix.class_users(mod, q)
+            # tests that executed any method of the class (or nested class)
+            out |= self._class_runtime(rel, mod, q)
+            # subclass users elsewhere are included via MRO in class_users;
+            # attributes copied by metaclasses into sibling classes of the
+            # same module (e.g. Dialect -> its Tokenizer/Parser) are covered
+            # by also taking users of classes nested under the outer class.
+            outer = q.split(".", 1)[0]
+            for k in ix.classes_in(mod):
+                cq = k.split(":", 1)[1]
+                if cq == outer or cq.startswith(outer + "."):
+                    out |= ix.tset(ix.ix["cls_users"][k])
+            if not out:
+                out |= ix.module_users(mod, deep=True)
+        else:
+            out |= ix.module_users(mod, deep=True)
+        return out
 
-    def code_tests(self, path: str) -> set[int]:
-        if path.startswith("tests/"):
-            return set(self.by_file.get(path, self.all_ids))
-        if not path.startswith("sqlglot/"):
-            return self.all_ids
-        parts = Path(path).parts
-        name = Path(path).stem
-        if len(parts) >= 3 and parts[1] in ("parsers", "generators", "dialects"):
-            # Per-dialect parsers/generators can affect generic dialect
-            # tests and optimizer-transformation behavior as well.
-            if name == "dialect":
-                return self.all_ids
-            return self.dialect_file(name) | self.general_dialect | self.optimizer | self.by_file["tests/test_expressions.py"] | self.parser_fast
-        if "optimizer" in parts:
-            return (
-                self.optimizer | self.by_file["tests/test_executor.py"] |
-                self.by_file["tests/test_lineage.py"] | self.general_dialect |
-                self.by_file["tests/test_expressions.py"]
-            )
-        if "executor" in parts:
-            return self.by_file["tests/test_executor.py"] | self.optimizer | self.general_dialect
-        if name == "serde":
-            # Serialization influences optimizers, dialects, and executor.
-            return self.all_ids
-        if "typing" in parts:
-            return self.dialect_file(name) | self.optimizer | self.by_file["tests/test_expressions.py"] | self.general_dialect
-        if "expressions" in parts or name in {"transforms", "parser", "generator", "dialect"}:
-            return self.all_ids
-        return self.all_ids
+    def _expr_class_users(self, name: str):
+        """Tests that instantiated sqlglot expression class `name` (or a
+        subclass, via the recorded MRO). None if the name is not a class."""
+        ix = self.index
+        hit = None
+        for k, sid in ix.ix["cls_users"].items():
+            m, _, q = k.partition(":")
+            if q == name and m.startswith("sqlglot.expressions"):
+                hit = (hit or set()) | ix.tset(sid)
+        if hit is None and self._is_expr_class(name):
+            return set()
+        return hit
 
-    def for_patch(self, patch: str) -> set[int]:
-        paths = parse_changed_paths(patch)
-        if not paths:
-            return self.all_ids
-        selected = set()
-        for path in paths:
-            if path.startswith("tests/fixtures/"):
-                selected.update(self.fixture_tests(path))
+    def _is_expr_class(self, name):
+        pat = re.compile(r"^class\s+" + re.escape(name) + r"\s*\(", re.M)
+        return any(pat.search(t) for f, t in self.index.sources().items() if f.startswith("sqlglot/expressions/"))
+
+    def _narrow_dict_entry(self, mod, ch: Change):
+        """Changed values of a dict keyed by expression classes (TRANSFORMS,
+        type metadata, ...) only matter when such an expression exists."""
+        a, b = ch.node, ch.new_node
+        if a is None or b is None or not isinstance(a, (ast.Assign, ast.AnnAssign)):
+            return None
+        da, db = a.value, b.value
+        if not (isinstance(da, ast.Dict) and isinstance(db, ast.Dict)) or len(da.keys) != len(db.keys):
+            return None
+        keys = []
+        for ka, kb, va, vb in zip(da.keys, db.keys, da.values, db.values):
+            if (_dump(ka) if ka else "**") != (_dump(kb) if kb else "**"):
+                return None
+            if _dump(va) == _dump(vb):
+                continue
+            if ka is None:
+                return None  # a spread (**BASE) changed
+            if isinstance(ka, ast.Attribute):
+                keys.append(ka.attr)
+            elif isinstance(ka, ast.Name):
+                keys.append(ka.id)
             else:
-                selected.update(self.code_tests(path))
-        return selected
+                return None
+        if not keys:
+            return None
+        out = set()
+        for k in keys:
+            users = self._expr_class_users(k)
+            if users is None:
+                return None
+            out |= users
+        if ch.kind == "class":
+            out &= self.index.class_users(mod, ch.unit.split("#", 1)[0]) | self._nested_users(mod, ch.unit)
+        else:
+            out &= self.index.module_users(mod, deep=True)
+        return out
+
+    def _nested_users(self, mod, unit):
+        ix = self.index
+        outer = unit.split("#", 1)[0].split(".", 1)[0]
+        out = set()
+        for k in ix.classes_in(mod):
+            cq = k.split(":", 1)[1]
+            if cq == outer or cq.startswith(outer + "."):
+                out |= ix.tset(ix.ix["cls_users"][k])
+        return out
+
+    def _narrow_by_name(self, rel, mod, ch: Change):
+        """A changed constant can only change behaviour where its value is
+        *used*.  Follow exact pass-throughs (x = self.NAME, f(k=self.NAME),
+        self.k = k) and collect every other reference; the answer is the tests
+        executing those uses (and, for class attributes, using the class).
+        Any import-time reference, dynamic string reference or untraceable
+        hand-off disables the narrowing (returns None -> broad rule)."""
+        node = ch.node
+        if node is None or ch.kind not in ("class", "module"):
+            return None
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets, value = [node.target], node.value
+        else:
+            return None
+        names = set()
+        for t in targets:
+            if not isinstance(t, ast.Name):
+                return None
+            names.add(t.id)
+        if not names or value is None:
+            return None
+        for sub in ast.walk(value):
+            if isinstance(sub, (ast.Lambda, ast.Call, ast.NamedExpr)):
+                return None
+        uses = self._trace_uses(names)
+        if uses is None:
+            return None
+        ix = self.index
+        out = set()
+        for frel, lno in uses:
+            ts, imods = ix.line_tests(frel, lno, lno)
+            if imods:
+                return None
+            out |= ts
+        if ch.kind == "class":
+            users = ix.class_users(mod, ch.unit.split("#", 1)[0]) | self._nested_users(mod, ch.unit)
+            if not users:
+                return None
+            out &= users
+        return out
+
+    _ast_cache: dict = {}
+
+    def _tree(self, frel):
+        t = self._ast_cache.get(frel)
+        if t is None:
+            t = self._ast_cache[frel] = ast.parse(self.index.sources()[frel])
+            for parent in ast.walk(t):
+                for child in ast.iter_child_nodes(parent):
+                    child._rwx_parent = parent
+        return t
+
+    def _trace_uses(self, start_names):
+        ix = self.index
+        src = ix.sources()
+        names = set(start_names)
+        todo = list(start_names)
+        uses = set()
+        defined_params = set()
+        handed = set()
+        while todo:
+            name = todo.pop()
+            files = [f for f, text in src.items() if name in text]
+            if len(files) > 25:
+                return None
+            for frel in files:
+                tree = self._tree(frel)
+                for n in ast.walk(tree):
+                    hit = ((isinstance(n, ast.Name) and n.id == name)
+                           or (isinstance(n, ast.Attribute) and n.attr == name)
+                           or (isinstance(n, ast.Constant) and n.value == name))
+                    if isinstance(n, ast.arg) and n.arg == name:
+                        defined_params.add(name)
+                        continue
+                    if isinstance(n, ast.keyword) and n.arg == name:
+                        continue  # receiving side of a pass-through
+                    if not hit:
+                        continue
+                    par = getattr(n, "_rwx_parent", None)
+                    if isinstance(n, ast.Constant):
+                        if self._in_slots(n):
+                            continue
+                        return None  # getattr(..., "NAME") style access
+                    # class/module level (re)definition of the same name
+                    if isinstance(par, (ast.Assign, ast.AnnAssign)) and n in (getattr(par, "targets", None) or [getattr(par, "target", None)]):
+                        scope = self._scope_of(par)
+                        if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                            continue
+                        # assignment target inside a function: store, not a read
+                        continue
+                    if isinstance(par, ast.AnnAssign) and par.value is None:
+                        continue
+                    # pass-through: k=<ref> or x = <ref>
+                    if isinstance(par, ast.keyword) and par.value is n and par.arg:
+                        if par.arg not in names:
+                            names.add(par.arg)
+                            todo.append(par.arg)
+                        handed.add(par.arg)
+                        uses.add((frel, n.lineno, "pass"))
+                        continue
+                    if isinstance(par, ast.Assign) and par.value is n and len(par.targets) == 1:
+                        tgt = par.targets[0]
+                        tname = tgt.id if isinstance(tgt, ast.Name) else tgt.attr if isinstance(tgt, ast.Attribute) else None
+                        if tname is None:
+                            return None
+                        if tname not in names:
+                            names.add(tname)
+                            todo.append(tname)
+                        uses.add((frel, n.lineno, "pass"))
+                        continue
+                    stmt = n
+                    while stmt is not None and not isinstance(stmt, ast.stmt):
+                        stmt = getattr(stmt, "_rwx_parent", None)
+                    uses.add((frel, n.lineno, "use"))
+        # a keyword hand-off must land in a real parameter we can see
+        if any(k not in defined_params for k in handed):
+            return None
+        # pass-throughs only move the value; every place it is consumed is a
+        # "use" line, and uses executed at import time disable the narrowing
+        return {(frel, lno) for frel, lno, kind in uses if kind == "use"}
+
+    @staticmethod
+    def _scope_of(node):
+        p = getattr(node, "_rwx_parent", None)
+        while p is not None and not isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef, ast.Module)):
+            p = getattr(p, "_rwx_parent", None)
+        return p
+
+    @staticmethod
+    def _in_slots(n):
+        p = getattr(n, "_rwx_parent", None)
+        while p is not None and not isinstance(p, ast.stmt):
+            p = getattr(p, "_rwx_parent", None)
+        return isinstance(p, (ast.Assign, ast.AnnAssign)) and any(
+            isinstance(t, ast.Name) and t.id == "__slots__"
+            for t in (getattr(p, "targets", None) or [getattr(p, "target", None)]))
+
+    def _class_runtime(self, rel, mod, qual) -> set:
+        src = self.index.sources().get(rel)
+        out = set()
+        if src is None:
+            return out
+        tree = ast.parse(src)
+        node = tree
+        for part in qual.split("."):
+            nxt = None
+            for st in getattr(node, "body", []):
+                if isinstance(st, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and st.name == part:
+                    nxt = st
+            if nxt is None:
+                return out
+            node = nxt
+        for st in ast.walk(node):
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)) and st.body:
+                ts, _ = self.index.line_tests(rel, st.body[0].lineno, st.end_lineno)
+                out |= ts
+        return out
+
+    # ------------------------------------------------------------ data files
+    def data_change(self, fd: FileDiff, reasons: list) -> set:
+        ix = self.index
+        sel = set()
+        for p in {fd.old, fd.new} - {None}:
+            sel |= ix.readers(p)
+            if fd.old is None or fd.new is None or fd.old != fd.new:
+                # file appears/disappears: code that lists its directory sees it
+                parts = p.split("/")
+                for k in range(1, len(parts)):
+                    sel |= self._dir_readers("/".join(parts[:k]))
+        reasons.append(f"data:{fd.path}:{len(sel)}")
+        return sel
+
+    def _dir_readers(self, d):
+        ix = self.index
+        sid = ix.ix["reads"].get(d)
+        return set(ix.tset(sid)) if sid is not None else set()
+
+    # ------------------------------------------------------------ entry
+    def for_patch(self, patch: str, reasons: list | None = None) -> set:
+        if reasons is None:
+            reasons = []
+        try:
+            files = parse_patch(patch)
+        except ValueError as e:
+            reasons.append(f"unparseable:{e}")
+            return set(self.all_ids)
+        sel = set()
+        for fd in files:
+            rel = fd.path
+            if rel is None:
+                continue
+            try:
+                if fd.binary:
+                    sel |= self.data_change(fd, reasons)
+                elif rel.endswith(".py") and (rel.startswith("sqlglot/") or rel.startswith("tests/")):
+                    sel |= self.python_change(rel, fd, reasons)
+                elif rel.endswith(".py"):
+                    sel |= self.index.readers(rel)
+                    reasons.append(f"py-outside:{rel}")
+                else:
+                    sel |= self.data_change(fd, reasons)
+            except Exception as e:  # never crash: fail safe
+                reasons.append(f"error:{rel}:{type(e).__name__}:{e}")
+                sel |= self.broad_for_path(rel)
+        return sel & self.all_ids
 
 
+# ===================================================================== schedule
+def _dur(lookup, n) -> int:
+    return round(lookup[n]["seconds"] * 1000)
+
+
+def schedule(ids, lookup) -> list[list[int]]:
+    """Choose worker count and assignment minimising max load + 2 s/worker.
+    LPT for every k, then a small local search on the best few k."""
+    if not ids:
+        return []
+    items = sorted(ids, key=lambda n: (-_dur(lookup, n), n))
+    durs = [_dur(lookup, n) for n in items]
+    total = sum(durs)
+    best = None
+    for k in range(1, min(MAX_WORKERS, len(items)) + 1):
+        lb = max(durs[0], -(-total // k)) + WORKER_COST_MS * k
+        if best is not None and lb >= best[0]:
+            continue
+        loads = [0] * k
+        buckets = [[] for _ in range(k)]
+        for n, d in zip(items, durs):
+            w = min(range(k), key=lambda i: (loads[i], i))
+            buckets[w].append(n)
+            loads[w] += d
+        buckets, loads = _improve(buckets, loads, lookup)
+        cost = max(loads) + WORKER_COST_MS * k
+        if best is None or cost < best[0]:
+            best = (cost, buckets)
+    return [sorted(b) for b in best[1] if b]
+
+
+def _improve(buckets, loads, lookup, rounds=50):
+    """Move/swap single tests out of the most loaded worker while it helps."""
+    k = len(buckets)
+    if k < 2:
+        return buckets, loads
+    for _ in range(rounds):
+        hi = max(range(k), key=lambda i: loads[i])
+        improved = False
+        for lo in sorted(range(k), key=lambda i: loads[i]):
+            if lo == hi:
+                continue
+            gap = loads[hi] - loads[lo]
+            # move
+            for n in sorted(buckets[hi], key=lambda x: -_dur(lookup, x)):
+                d = _dur(lookup, n)
+                if 0 < d < gap:
+                    buckets[hi].remove(n)
+                    buckets[lo].append(n)
+                    loads[hi] -= d
+                    loads[lo] += d
+                    improved = True
+                    break
+            if improved:
+                break
+            # swap
+            for n in buckets[hi]:
+                dn = _dur(lookup, n)
+                for m in buckets[lo]:
+                    dm = _dur(lookup, m)
+                    if 0 < dn - dm < gap:
+                        buckets[hi].remove(n)
+                        buckets[lo].remove(m)
+                        buckets[hi].append(m)
+                        buckets[lo].append(n)
+                        loads[hi] += dm - dn
+                        loads[lo] += dn - dm
+                        improved = True
+                        break
+                if improved:
+                    break
+            if improved:
+                break
+        if not improved:
+            break
+    return buckets, loads
+
+
+# ===================================================================== main
 def main() -> None:
     tests = json.loads((DATA / "tests.json").read_text(encoding="utf-8"))["tests"]
-    select = Selector(tests)
-    for patch in sorted((DATA / "commits").glob("*.patch")):
-        ids = select.for_patch(patch.read_text(encoding="utf-8"))
-        workers = schedule(ids, select.by_number)
-        print(json.dumps({"commit": patch.stem, "workers": workers}, separators=(",", ":")))
-    print("Selection complete", file=sys.stderr)
+    patches = sorted((DATA / "commits").glob("*.patch"))
+    out_lines = []
+    try:
+        select = Selector(tests)
+    except Exception as e:  # index unusable: everything, still valid output
+        print(f"index load failed: {e}", file=sys.stderr)
+        select = None
+    all_ids = {t["number"] for t in tests}
+    lookup = {t["number"]: t for t in tests}
+    for patch in patches:
+        reasons: list = []
+        try:
+            text = patch.read_bytes().decode("utf-8", errors="replace")
+            ids = select.for_patch(text, reasons) if select else set(all_ids)
+        except Exception as e:
+            reasons.append(f"fatal:{e}")
+            ids = set(all_ids)
+        workers = schedule(ids, lookup)
+        log(patch.stem, len(ids), reasons)
+        out_lines.append(json.dumps({"commit": patch.stem, "workers": workers}, separators=(",", ":")))
+    sys.stdout.write("\n".join(out_lines) + ("\n" if out_lines else ""))
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":

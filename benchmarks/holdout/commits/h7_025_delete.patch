@@ -1,0 +1,12 @@
+diff --git a/sqlglot/transforms.py b/sqlglot/transforms.py
+index 1111111..2222222 100644
+--- a/sqlglot/transforms.py
++++ b/sqlglot/transforms.py
+@@ -213,7 +213,6 @@
+     corresponding expression to avoid creating invalid column references.
+     """
+     if isinstance(expression, exp.Select) and expression.args.get("qualify"):
+-        parent = expression.parent
+         if isinstance(parent, exp.Insert) and isinstance(parent.parent, exp.MultitableInserts):
+             # A FROM-first multi-table INSERT branch shares its parent's FROM, so it can't be wrapped
+             raise UnsupportedError(

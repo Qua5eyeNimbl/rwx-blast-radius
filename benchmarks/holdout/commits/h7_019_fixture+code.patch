@@ -1,0 +1,26 @@
+diff --git a/tests/fixtures/optimizer/tpc-h/tpc-h.sql b/tests/fixtures/optimizer/tpc-h/tpc-h.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/tpc-h/tpc-h.sql
++++ b/tests/fixtures/optimizer/tpc-h/tpc-h.sql
+@@ -789,7 +789,7 @@
+     COUNT("orders"."o_orderkey") AS "c_count"
+   FROM "customer" AS "customer"
+   LEFT JOIN "orders_2" AS "orders"
+-    ON "customer"."c_custkey" = "orders"."o_custkey"
++  1   ON "customer"."c_custkey" = "orders"."o_custkey"
+   GROUP BY
+     "customer"."c_custkey"
+ )
+diff --git a/sqlglot/generators/tsql.py b/sqlglot/generators/tsql.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/tsql.py
++++ b/sqlglot/generators/tsql.py
+@@ -548,7 +548,7 @@
+             select_into.set("into", exp.Into(this=table, temporary=is_temp))
+ 
+             if like_property:
+-                select_into.limit(0, copy=False)
++                select_into.limit(1, copy=False)
+ 
+             sql = self.sql(select_into)
+         else:

@@ -1,0 +1,13 @@
+diff --git a/sqlglot/expressions/builders.py b/sqlglot/expressions/builders.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/builders.py
++++ b/sqlglot/expressions/builders.py
+@@ -980,7 +980,7 @@
+                 subquery.comments = [f"source: {name}"]
+ 
+                 # Continue expanding within the subquery
+-                return subquery.transform(_expand, copy=False)
++                return subquery.transform(_expand, copy=True)
+ 
+         return node
+ 

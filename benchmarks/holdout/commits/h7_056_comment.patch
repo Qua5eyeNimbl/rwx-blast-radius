@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generator.py b/sqlglot/generator.py
+index 1111111..2222222 100644
+--- a/sqlglot/generator.py
++++ b/sqlglot/generator.py
+@@ -2273,6 +2273,7 @@
+ 
+         return properties_locs
+ 
++    # Keep in sync with the generator
+     def property_name(self, expression: exp.Property, string_key: bool = False) -> str:
+         if isinstance(expression.this, exp.Dot):
+             return self.sql(expression, "this")

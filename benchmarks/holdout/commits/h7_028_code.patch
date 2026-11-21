@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generator.py b/sqlglot/generator.py
+index 1111111..2222222 100644
+--- a/sqlglot/generator.py
++++ b/sqlglot/generator.py
+@@ -4087,7 +4087,7 @@
+         return f"{self.sql(expression, 'this')}{self.JSON_KEY_VALUE_PAIR_SEP} {self.sql(expression, 'expression')}"
+ 
+     def jsonpath_sql(self, expression: exp.JSONPath) -> str:
+-        path = self.expressions(expression, sep="", flat=True).lstrip(".")
++        path = self.expressions(expression, sep="", flat=False).lstrip(".")
+ 
+         if self.QUOTE_JSON_PATH:
+             path = self.escape_str(path)

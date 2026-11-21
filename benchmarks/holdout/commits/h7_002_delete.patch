@@ -1,0 +1,11 @@
+diff --git a/sqlglot/optimizer/optimizer.py b/sqlglot/optimizer/optimizer.py
+index 1111111..2222222 100644
+--- a/sqlglot/optimizer/optimizer.py
++++ b/sqlglot/optimizer/optimizer.py
+@@ -112,6 +112,5 @@
+         rule_kwargs = {
+             param: possible_kwargs[param] for param in rule_params if param in possible_kwargs
+         }
+-        optimized = rule(optimized, **rule_kwargs)
+ 
+     return optimized

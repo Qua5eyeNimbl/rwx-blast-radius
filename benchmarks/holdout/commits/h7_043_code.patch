@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/singlestore.py b/sqlglot/generators/singlestore.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/singlestore.py
++++ b/sqlglot/generators/singlestore.py
+@@ -1598,7 +1598,7 @@
+         return "; ".join(statements)
+ 
+     def renamecolumn_sql(self, expression: exp.RenameColumn) -> str:
+-        if expression.args.get("exists"):
++        if expression.args.get("exist"):
+             self.unsupported("RENAME COLUMN does not support exists")
+         old_column = self.sql(expression, "this")
+         new_column = self.sql(expression, "to")

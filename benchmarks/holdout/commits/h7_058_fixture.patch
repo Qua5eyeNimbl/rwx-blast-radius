@@ -1,0 +1,13 @@
+diff --git a/tests/fixtures/optimizer/merge_subqueries.sql b/tests/fixtures/optimizer/merge_subqueries.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/merge_subqueries.sql
++++ b/tests/fixtures/optimizer/merge_subqueries.sql
+@@ -683,7 +683,7 @@
+     a
+   FROM (
+     SELECT 1 a
+-  ) AS conflict
++  ) AS1  conflict
+ ), j AS (
+   SELECT 1 AS a
+ )

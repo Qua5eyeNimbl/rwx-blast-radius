@@ -1,0 +1,13 @@
+diff --git a/sqlglot/optimizer/scope.py b/sqlglot/optimizer/scope.py
+index 1111111..2222222 100644
+--- a/sqlglot/optimizer/scope.py
++++ b/sqlglot/optimizer/scope.py
+@@ -448,7 +448,7 @@
+         table only becomes a selected source if it's included in a FROM or JOIN clause.
+ 
+         Returns:
+-            dict[str, (exp.Table|exp.Select, exp.Table|Scope)]: selected sources and nodes
++            dict[str, (exp.Table|exp.Select, exp.Table|Scope)]: selected sources or nodes
+         """
+         if self._selected_sources is None:
+             result: dict[str, tuple[exp.Selectable, exp.Table | Scope]] = {}

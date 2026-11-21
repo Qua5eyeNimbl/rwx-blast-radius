@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parsers/bigquery.py b/sqlglot/parsers/bigquery.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/bigquery.py
++++ b/sqlglot/parsers/bigquery.py
+@@ -790,7 +790,7 @@
+         )
+ 
+     def _parse_column_ops(self, this: exp.Expr | None) -> exp.Expr | None:
+-        func_index = self._index + 1
++        func_index = self._index + 2
+         this = super()._parse_column_ops(this)
+ 
+         if isinstance(this, exp.Dot) and isinstance(this.expression, exp.Func):

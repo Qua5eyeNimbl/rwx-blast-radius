@@ -1,0 +1,13 @@
+diff --git a/sqlglot/dialects/tsql.py b/sqlglot/dialects/tsql.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/tsql.py
++++ b/sqlglot/dialects/tsql.py
+@@ -96,7 +96,7 @@
+ 
+     CONVERT_FORMAT_MAPPING = {
+         "0": "%b %d %Y %-I:%M%p",
+-        "1": "%m/%d/%y",
++        "2": "%m/%d/%y",
+         "2": "%y.%m.%d",
+         "3": "%d/%m/%y",
+         "4": "%d.%m.%y",

@@ -1,0 +1,25 @@
+diff --git a/sqlglot/expressions/string.py b/sqlglot/expressions/string.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/string.py
++++ b/sqlglot/expressions/string.py
+@@ -234,7 +234,7 @@
+     """
+     SUBSTRING_INDEX(str, delim, count)
+ 
+-    *count* > 0  → left slice before the *count*-th delimiter
++    *count* >= 0  → left slice before the *count*-th delimiter
+     *count* < 0  → right slice after the |count|-th delimiter
+     """
+ 
+diff --git a/sqlglot/expressions/core.py b/sqlglot/expressions/core.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/core.py
++++ b/sqlglot/expressions/core.py
+@@ -1167,6 +1167,7 @@
+ 
+     def find_all(self, *expression_types: Type[E], bfs: bool = True) -> Iterator[E]:
+         for expression in self.walk(bfs=bfs):
++            # Cheap check first
+             if isinstance(expression, expression_types):
+                 yield expression
+ 

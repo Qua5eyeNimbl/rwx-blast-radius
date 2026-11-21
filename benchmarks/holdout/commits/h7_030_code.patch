@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parsers/snowflake.py b/sqlglot/parsers/snowflake.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/snowflake.py
++++ b/sqlglot/parsers/snowflake.py
+@@ -1053,7 +1053,7 @@
+ 
+     def _parse_with_constraint(self) -> exp.Expr | None:
+         if self._prev.token_type != TokenType.WITH:
+-            self._retreat(self._index - 1)
++            self._retreat(self._index + 1)
+ 
+         if self._match_text_seq("MASKING", "POLICY"):
+             policy = self._parse_column()

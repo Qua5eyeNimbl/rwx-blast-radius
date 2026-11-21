@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/duckdb.py
++++ b/sqlglot/generators/duckdb.py
+@@ -2661,7 +2661,7 @@
+         n = expression.args["elementcount"]
+         gen = expression.args["gen"]
+ 
+-        if not isinstance(gen, exp.Rand):
++        if isinstance(gen, exp.Rand):
+             # (ABS(HASH(seed)) % 1000000) / 1000000.0
+             random_expr: exp.Expr = exp.Div(
+                 this=exp.Paren(

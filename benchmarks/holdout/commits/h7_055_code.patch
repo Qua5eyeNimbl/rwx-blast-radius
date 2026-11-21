@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -5204,7 +5204,7 @@
+ 
+         at_before = self._parse_historical_data()
+         if at_before:
+-            table.set("when", at_before)
++            table.set("whe", at_before)
+ 
+         pivots = self._parse_pivots()
+         if pivots:

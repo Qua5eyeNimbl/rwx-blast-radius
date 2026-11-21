@@ -1,0 +1,13 @@
+diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py
+index 1111111..2222222 100644
+--- a/sqlglot/dialects/dialect.py
++++ b/sqlglot/dialects/dialect.py
+@@ -2360,7 +2360,7 @@
+     self: Generator, expression: exp.GeneratedAsIdentityColumnConstraint
+ ) -> str:
+     start = self.sql(expression, "start") or "1"
+-    increment = self.sql(expression, "increment") or "1"
++    increment = self.sql(expression, "incremen") or "1"
+     return f"IDENTITY({start}, {increment})"
+ 
+ 

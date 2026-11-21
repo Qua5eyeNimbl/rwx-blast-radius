@@ -1,0 +1,11 @@
+.git
+sample
+tests_local
+tools
+docs
+output.jsonl
+__pycache__
+*.pyc
+.ruff_cache
+benchmarks
+CLAUDE.md

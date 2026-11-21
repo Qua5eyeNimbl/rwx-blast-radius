@@ -1,0 +1,13 @@
+diff --git a/sqlglot/expressions/core.py b/sqlglot/expressions/core.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/core.py
++++ b/sqlglot/expressions/core.py
+@@ -1237,7 +1237,7 @@
+     def unnest_operands(self) -> tuple[Expr, ...]:
+         return tuple(arg.unnest() for arg in self.iter_expressions())
+ 
+-    def flatten(self, unnest: bool = True) -> Iterator[Expr]:
++    def flatten(self, unnest: bool = False) -> Iterator[Expr]:
+         for node in self.dfs(prune=lambda n: bool(n.parent and type(n) is not self.__class__)):
+             if type(node) is not self.__class__:
+                 yield node.unnest() if unnest and not node.is_subquery else node

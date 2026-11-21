@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/redshift.py b/sqlglot/generators/redshift.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/redshift.py
++++ b/sqlglot/generators/redshift.py
+@@ -184,7 +184,7 @@
+         "full",
+         "globaldict256",
+         "globaldict64k",
+-        "grant",
++        "gran",
+         "group",
+         "gzip",
+         "having",

@@ -1,0 +1,25 @@
+diff --git a/sqlglot/expressions/ddl.py b/sqlglot/expressions/ddl.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/ddl.py
++++ b/sqlglot/expressions/ddl.py
+@@ -253,7 +253,7 @@
+         "dtype": False,
+         "collate": False,
+         "using": False,
+-        "default": False,
++        "default": True,
+         "drop": False,
+         "comment": False,
+         "allow_null": False,
+diff --git a/sqlglot/generators/materialize.py b/sqlglot/generators/materialize.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/materialize.py
++++ b/sqlglot/generators/materialize.py
+@@ -31,6 +31,7 @@
+             ]
+         ),
+         exp.GeneratedAsIdentityColumnConstraint: lambda self, e: "",
++        # Intentionally not cached
+         exp.OnConflict: lambda self, e: "",
+         exp.PrimaryKeyColumnConstraint: lambda self, e: "",
+     }

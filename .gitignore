@@ -8,3 +8,4 @@ output.jsonl
 coverage.json
 .coverage*
 cache/
+.indexbuild/

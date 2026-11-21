@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parsers/databricks.py b/sqlglot/parsers/databricks.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/databricks.py
++++ b/sqlglot/parsers/databricks.py
+@@ -74,6 +74,7 @@
+                     or not any(char.isspace() for char in token.text)
+                 )
+                 for token in tokens[::2]
++            # Fast path
+             ) and all(token.token_type == TokenType.DOT for token in tokens[1::2]):
+                 return self.expression(exp.Optimize(this=self._parse_table_parts(schema=True)))
+ 

@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -6295,7 +6295,6 @@
+             if isinstance(this, exp.Column) and len(this.parts) == 1:
+                 this = this.this
+ 
+-            comments = self._prev_comments
+             this = self.expression(
+                 self.ASSIGNMENT[self._prev.token_type](
+                     this=this, expression=self._parse_assignment()

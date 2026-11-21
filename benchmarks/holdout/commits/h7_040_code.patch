@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -4427,7 +4427,7 @@
+         comments = self._prev_comments
+ 
+         if self._match_text_seq("NOT", "MATERIALIZED"):
+-            materialized = False
++            materialized = True
+         elif self._match_text_seq("MATERIALIZED"):
+             materialized = True
+         else:

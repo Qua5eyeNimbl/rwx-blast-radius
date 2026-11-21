@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -5095,7 +5095,7 @@
+                 self._retreat(index)
+                 return None
+ 
+-            if parts is None:
++            if parts is not None:
+                 parts = []
+ 
+             if has_dot and self._prev_comments:

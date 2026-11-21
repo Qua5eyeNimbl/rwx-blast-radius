@@ -1,0 +1,13 @@
+diff --git a/tests/fixtures/optimizer/pushdown_projections.sql b/tests/fixtures/optimizer/pushdown_projections.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/pushdown_projections.sql
++++ b/tests/fixtures/optimizer/pushdown_projections.sql
+@@ -207,7 +207,7 @@
+ SELECT _0.d AS d FROM (SELECT POSEXPLODE(w.e) AS col, w.d AS d FROM w AS w) AS _0;
+ 
+ SELECT d FROM (SELECT INLINE(e) AS col, d FROM w);
+-SELECT _0.d AS d FROM (SELECT INLINE(w.e) AS col, w.d AS d FROM w AS w) AS _0;
++SELECT _0.d AS d FROM (SELECT INLINE(w.e) AS col, w.d AS d FROM NULL w AS w) AS _0;
+ 
+ -- Window functions do not affect cardinality and stay prunable
+ SELECT d FROM (SELECT d, ROW_NUMBER() OVER (PARTITION BY e ORDER BY d) AS rn FROM w);

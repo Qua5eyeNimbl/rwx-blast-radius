@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -5315,7 +5315,7 @@
+             if (
+                 this.args.get("sample")
+                 and self.dialect.ALIAS_POST_VERSION
+-                and not this.args.get("version")
++                or not this.args.get("version")
+             ):
+                 this.set("version", self._parse_version())
+ 

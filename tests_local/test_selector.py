@@ -1,15 +1,108 @@
-"""Unit checks for structural behavior; no lookup of sample answers."""
+"""Unit checks for structural behaviour; no lookup of sample answers."""
 
 import json
+import os
 import pathlib
+import subprocess
 import sys
 import unittest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from selector import Selector, parse_changed_paths, schedule
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-TESTS = json.loads((ROOT / 'sample' / 'tests.json').read_text())['tests']
+sys.path.insert(0, str(ROOT))
+from selector import (  # noqa: E402
+    MAX_WORKERS,
+    Selector,
+    apply_hunks,
+    diff_module,
+    parse_patch,
+    schedule,
+)
+
+TESTS = json.loads((ROOT / "sample" / "tests.json").read_text())["tests"]
+
+
+def mkpatch(path, old_start, old_lines, new_lines, ctx_before=(), ctx_after=()):
+    body = [" " + c for c in ctx_before] + ["-" + l for l in old_lines] + ["+" + l for l in new_lines] + [" " + c for c in ctx_after]
+    ol = len(ctx_before) + len(old_lines) + len(ctx_after)
+    nl = len(ctx_before) + len(new_lines) + len(ctx_after)
+    return (f"diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n"
+            f"@@ -{old_start},{ol} +{old_start},{nl} @@\n" + "\n".join(body) + "\n")
+
+
+class TestPatchParsing(unittest.TestCase):
+    def test_paths_and_hunks(self):
+        p = mkpatch("a.py", 2, ["x = 1"], ["x = 2"], ["# c"], ["y = 3"])
+        (fd,) = parse_patch(p)
+        self.assertEqual((fd.old, fd.new), ("a.py", "a.py"))
+        self.assertEqual(len(fd.hunks), 1)
+        self.assertEqual(apply_hunks("a\n# c\nx = 1\ny = 3\n", fd.hunks), "a\n# c\nx = 2\ny = 3\n")
+
+    def test_new_and_deleted_files(self):
+        new = "diff --git a/n.sql b/n.sql\nnew file mode 100644\n--- /dev/null\n+++ b/n.sql\n@@ -0,0 +1 @@\n+SELECT 1;\n"
+        (fd,) = parse_patch(new)
+        self.assertIsNone(fd.old)
+        self.assertEqual(fd.new, "n.sql")
+        dele = "diff --git a/d.sql b/d.sql\ndeleted file mode 100644\n--- a/d.sql\n+++ /dev/null\n@@ -1 +0,0 @@\n-SELECT 1;\n"
+        (fd,) = parse_patch(dele)
+        self.assertEqual(fd.old, "d.sql")
+        self.assertIsNone(fd.new)
+
+    def test_rename_and_no_newline_marker(self):
+        p = ("diff --git a/x.sql b/y.sql\nsimilarity index 90%\nrename from x.sql\nrename to y.sql\n"
+             "--- a/x.sql\n+++ b/y.sql\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n\\ No newline at end of file\n")
+        (fd,) = parse_patch(p)
+        self.assertEqual((fd.old, fd.new), ("x.sql", "y.sql"))
+
+    def test_context_mismatch_raises(self):
+        (fd,) = parse_patch(mkpatch("a.py", 1, ["x = 1"], ["x = 2"]))
+        with self.assertRaises(ValueError):
+            apply_hunks("x = 9\n", fd.hunks)
+
+    def test_garbage_raises(self):
+        with self.assertRaises(ValueError):
+            parse_patch("unrecognized patch content")
+
+
+class TestAstDiff(unittest.TestCase):
+    BASE = "class A:\n    K = 1\n\n    def f(self, x):\n        if x:\n            return 1\n        return 2\n"
+
+    def test_comment_only_is_no_change(self):
+        new = self.BASE.replace("        if x:\n", "        # note\n        if x:\n")
+        self.assertEqual(diff_module(self.BASE, new), [])
+
+    def test_function_statement_change(self):
+        new = self.BASE.replace("return 1", "return 3")
+        (ch,) = diff_module(self.BASE, new)
+        self.assertEqual((ch.kind, ch.unit), ("function", "A.f"))
+        self.assertEqual(ch.lines, [(6, 6)])
+
+    def test_condition_change_maps_to_header(self):
+        new = self.BASE.replace("if x:", "if not x:")
+        (ch,) = diff_module(self.BASE, new)
+        self.assertEqual((ch.kind, ch.detail, ch.lines), ("function", "header", [(5, 5)]))
+
+    def test_class_constant_change(self):
+        (ch,) = diff_module(self.BASE, self.BASE.replace("K = 1", "K = 2"))
+        self.assertEqual((ch.kind, ch.unit), ("class", "A"))
+
+    def test_default_argument_change(self):
+        base = "def f(a=1):\n    return a\n"
+        (ch,) = diff_module(base, "def f(a=2):\n    return a\n")
+        self.assertEqual(ch.kind, "defaults")
+
+    def test_lambda_in_dict(self):
+        base = "class P:\n    F = {\n        'A': lambda a: g(a, 0),\n    }\n"
+        (ch,) = diff_module(base, base.replace("g(a, 0)", "g(a, 1)"))
+        self.assertEqual((ch.kind, ch.detail), ("function", "lambda"))
+
+    def test_is_none_equivalence(self):
+        base = "def f(x):\n    if x is None:\n        return 1\n"
+        self.assertEqual(diff_module(base, base.replace("is None", "== None")), [])
+        self.assertNotEqual(diff_module(base, base.replace("is None", "is not None")), [])
+
+    def test_syntax_error_raises(self):
+        with self.assertRaises(SyntaxError):
+            diff_module(self.BASE, self.BASE.replace("return 2", "return 2)"))
 
 
 class TestSelector(unittest.TestCase):
@@ -17,33 +110,63 @@ class TestSelector(unittest.TestCase):
     def setUpClass(cls):
         cls.selector = Selector(TESTS)
 
-    def test_paths(self):
-        text = 'diff --git a/a.py b/b.py\n--- a/a.py\n+++ b/b.py\n@@ -1 +1 @@\n-a\n+b\n'
-        self.assertEqual(parse_changed_paths(text), {'a.py', 'b.py'})
-
-    def test_fixture_resolves_test(self):
-        selection = self.selector.fixture_tests('tests/fixtures/optimizer/pushdown_predicates.sql')
-        ids = {self.selector.by_number[n]['id'] for n in selection}
-        self.assertIn('tests/test_optimizer.py::TestOptimizer::test_pushdown_predicates', ids)
+    def ids(self, nums):
+        return {self.selector.by_number[n]["id"] for n in nums}
 
     def test_unrecognized_changes_fail_safe(self):
-        self.assertEqual(self.selector.for_patch('unrecognized patch content'), self.selector.all_ids)
+        self.assertEqual(self.selector.for_patch("unrecognized patch content"), self.selector.all_ids)
 
-    def test_worker_layout(self):
-        ids = {1, 2, 3, 4, 5}
-        workers = schedule(ids, self.selector.by_number)
-        flat = [n for worker in workers for n in worker]
-        self.assertEqual(set(flat), ids)
-        self.assertEqual(len(flat), len(ids))
-        self.assertLessEqual(len(workers), 8)
+    def test_fixture_selects_its_reader(self):
+        p = mkpatch("tests/fixtures/optimizer/pushdown_predicates.sql", 1, ["SELECT 1;"], ["SELECT 2;"])
+        ids = self.ids(self.selector.for_patch(p))
+        self.assertIn("tests/test_optimizer.py::TestOptimizer::test_pushdown_predicates", ids)
 
-    def test_all_sample_patches_select_valid_numbers(self):
-        for patch in (ROOT / 'sample' / 'commits').glob('*.patch'):
+    def test_unknown_python_base_is_broad(self):
+        p = mkpatch("sqlglot/not_a_module.py", 1, ["x = 1"], ["x = 2"])
+        self.assertTrue(self.selector.for_patch(p))
+
+    def test_selected_numbers_are_valid(self):
+        for patch in sorted((ROOT / "sample" / "commits").glob("*.patch")):
             with self.subTest(patch=patch.name):
-                selection = self.selector.for_patch(patch.read_text())
-                workers = schedule(selection, self.selector.by_number)
-                self.assertTrue(all(n in self.selector.all_ids for w in workers for n in w))
+                selection = self.selector.for_patch(patch.read_text(encoding="utf-8"))
+                self.assertTrue(selection <= self.selector.all_ids)
 
 
-if __name__ == '__main__':
+class TestSchedule(unittest.TestCase):
+    def test_worker_layout(self):
+        lookup = {t["number"]: t for t in TESTS}
+        for ids in ({1, 2, 3, 4, 5}, set(range(0, 1620, 3)), {1490, 1106, 1224, 5}):
+            workers = schedule(ids, lookup)
+            flat = [n for w in workers for n in w]
+            self.assertEqual(sorted(flat), sorted(ids))
+            self.assertLessEqual(len(workers), MAX_WORKERS)
+            self.assertTrue(all(workers))
+
+    def test_empty(self):
+        self.assertEqual(schedule(set(), {}), [])
+
+
+class TestContract(unittest.TestCase):
+    def test_stdout_is_only_jsonl(self):
+        env = dict(os.environ, RWX_DATA=str(ROOT / "sample"))
+        env.pop("RWX_DEBUG", None)
+        out = subprocess.run([sys.executable, str(ROOT / "selector.py")], env=env, capture_output=True, check=True).stdout
+        self.assertFalse(out.startswith(b"\xef\xbb\xbf"))
+        lines = out.decode("utf-8").split("\n")
+        self.assertEqual(lines[-1], "")
+        commits = sorted(p.stem for p in (ROOT / "sample" / "commits").glob("*.patch"))
+        seen = []
+        valid = {t["number"] for t in TESTS}
+        for line in lines[:-1]:
+            obj = json.loads(line)
+            self.assertEqual(set(obj), {"commit", "workers"})
+            nums = [n for w in obj["workers"] for n in w]
+            self.assertTrue(all(type(n) is int and n in valid for n in nums))
+            self.assertEqual(len(nums), len(set(nums)))
+            self.assertLessEqual(len([w for w in obj["workers"] if w]), MAX_WORKERS)
+            seen.append(obj["commit"])
+        self.assertEqual(sorted(seen), commits)
+
+
+if __name__ == "__main__":
     unittest.main()

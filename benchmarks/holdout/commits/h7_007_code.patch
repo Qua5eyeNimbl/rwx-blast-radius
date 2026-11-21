@@ -1,0 +1,13 @@
+diff --git a/sqlglot/transforms.py b/sqlglot/transforms.py
+index 1111111..2222222 100644
+--- a/sqlglot/transforms.py
++++ b/sqlglot/transforms.py
+@@ -1035,7 +1035,7 @@
+ 
+     For example,
+         - Postgres: SELECT * FROM tbl WHERE 5 > ANY(tbl.col)
+-        - Spark: SELECT * FROM tbl WHERE EXISTS(tbl.col, x -> x < 5)
++        - Spark: SELECT * FROM tbl WHERE EXISTS(tbl.col, x -> x <= 5)
+ 
+     Both ANY and EXISTS accept queries but currently only array expressions are supported for this
+     transformation

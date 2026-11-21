@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/duckdb.py
++++ b/sqlglot/generators/duckdb.py
+@@ -4613,7 +4613,7 @@
+ 
+         posexplode_sql = self.format_args(gen_subscripts, unnest_sql)
+ 
+-        if isinstance(parent, exp.From) or (parent and isinstance(parent.parent, exp.From)):
++        if isinstance(parent, exp.From) and (parent and isinstance(parent.parent, exp.From)):
+             # SELECT * FROM POSEXPLODE(col) -> SELECT * FROM (SELECT GENERATE_SUBSCRIPTS(...), UNNEST(...))
+             return self.sql(exp.Subquery(this=exp.Select(expressions=[posexplode_sql])))
+ 

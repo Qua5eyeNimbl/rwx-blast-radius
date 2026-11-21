@@ -1,0 +1,26 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -10879,7 +10879,7 @@
+         if isinstance(query, exp.Subquery):
+             query = exp.select("*").from_(query, copy=False)
+ 
+-        if not query.args.get("from_"):
++        if query.args.get("from_"):
+             query = exp.select("*").from_(query.subquery(copy=False), copy=False)
+ 
+         while self._match(TokenType.PIPE_GT):
+diff --git a/sqlglot/expressions/functions.py b/sqlglot/expressions/functions.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/functions.py
++++ b/sqlglot/expressions/functions.py
+@@ -391,7 +391,7 @@
+         "timestamp_col": False,
+         "model": False,
+         "id_cols": False,
+-        "horizon": False,
++        "horizon": True,
+         "forecast_end_timestamp": False,
+         "confidence_level": False,
+         "output_historical_time_series": False,

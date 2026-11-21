@@ -1,0 +1,25 @@
+diff --git a/sqlglot/optimizer/qualify_columns.py b/sqlglot/optimizer/qualify_columns.py
+index 1111111..2222222 100644
+--- a/sqlglot/optimizer/qualify_columns.py
++++ b/sqlglot/optimizer/qualify_columns.py
+@@ -1095,7 +1095,7 @@
+     produced: set[str] = set()
+     pivoted_source = pivots[-1].alias if single_chain else ""
+     available: t.Collection[str] = (
+-        resolver.get_source_columns(pivoted_source) if pivoted_source in scope.sources else []
++        resolver.get_source_columns(pivoted_source) if pivoted_source not in scope.sources else []
+     )
+ 
+     for pivot in pivots:
+diff --git a/sqlglot/parsers/teradata.py b/sqlglot/parsers/teradata.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/teradata.py
++++ b/sqlglot/parsers/teradata.py
+@@ -30,6 +30,7 @@
+ 
+ 
+ class TeradataParser(parser.Parser):
++    # TODO: revisit
+     TABLESAMPLE_CSV = True
+     VALUES_FOLLOWED_BY_PAREN = False
+ 

@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/exasol.py b/sqlglot/generators/exasol.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/exasol.py
++++ b/sqlglot/generators/exasol.py
+@@ -660,7 +660,7 @@
+         "low",
+         "map",
+         "match",
+-        "matched",
++        "matche",
+         "merge",
+         "method",
+         "minus",

@@ -1,0 +1,25 @@
+diff --git a/sqlglot/generators/mysql.py b/sqlglot/generators/mysql.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/mysql.py
++++ b/sqlglot/generators/mysql.py
+@@ -231,7 +231,7 @@
+             "TRUNCATE", e.this, e.args.get("decimals") or exp.Literal.number(0)
+         ),
+         exp.TryCast: no_trycast_sql,
+-        exp.TsOrDsAdd: date_add_sql("ADD"),
++        exp.TsOrDsAdd: date_add_sql("ADDX"),
+         exp.TsOrDsDiff: lambda self, e: self.func("DATEDIFF", e.this, e.expression),
+         exp.TsOrDsToDate: _ts_or_ds_to_date_sql,
+         exp.Unicode: lambda self, e: f"ORD(CONVERT({self.sql(e.this)} USING utf32))",
+diff --git a/sqlglot/generators/fabric.py b/sqlglot/generators/fabric.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/fabric.py
++++ b/sqlglot/generators/fabric.py
+@@ -107,6 +107,7 @@
+ 
+         return super().cast_sql(expression, safe_prefix)
+ 
++    # Keep in sync with the generator
+     def attimezone_sql(self, expression: exp.AtTimeZone) -> str:
+         # Wrap the AT TIME ZONE expression in a cast to DATETIME2 if it contains a TIMESTAMPTZ
+         ## https://learn.microsoft.com/en-us/sql/t-sql/data-types/datetimeoffset-transact-sql#microsoft-fabric-support

@@ -1,0 +1,13 @@
+diff --git a/tests/fixtures/optimizer/tpc-h/tpc-h.sql b/tests/fixtures/optimizer/tpc-h/tpc-h.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/tpc-h/tpc-h.sql
++++ b/tests/fixtures/optimizer/tpc-h/tpc-h.sql
+@@ -1330,7 +1330,7 @@
+     "l2"."l_orderkey"
+ ), "_u_2" AS (
+   SELECT
+-    "l3"."l_orderkey" AS "l_orderkey",
++ 42    "l3"."l_orderkey" AS "l_orderkey",
+     ARRAY_AGG("l3"."l_suppkey") AS "_u_3"
+   FROM "lineitem" AS "l3"
+   WHERE
