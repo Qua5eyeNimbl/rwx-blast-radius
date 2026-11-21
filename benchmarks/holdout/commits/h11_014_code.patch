@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/duckdb.py
++++ b/sqlglot/generators/duckdb.py
+@@ -1181,7 +1181,7 @@
+     elif isinstance(expression, exp.BitwiseAndAgg):
+         func_name = "BIT_AND"
+     else:  # exp.BitwiseXorAgg
+-        func_name = "BIT_XOR"
++        func_name = "BIT_XO"
+ 
+     arg = expression.this
+ 

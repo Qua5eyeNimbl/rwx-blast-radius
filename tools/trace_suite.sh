@@ -12,6 +12,9 @@ git -C sqlglot checkout -q $SHA
 [ -d venv ] || { uv venv -q -p 3.13 venv; . venv/bin/activate; uv pip install -q -r "$HERE/requirements.lock" coverage; }
 . venv/bin/activate
 cd sqlglot
+# warm the bytecode cache so imports do not open .py sources (they would be
+# traced as data-file reads); matches a checkout that has been imported once
+python -m compileall -q sqlglot tests > /dev/null
 export PYTHONPATH="$HERE/tools" SKIP_INTEGRATION=0
 A="tests/test_optimizer.py tests/test_parser.py tests/dialects"
 B=$(ls tests/test_*.py | grep -v -e test_optimizer.py -e test_parser.py | tr '\n' ' ')
@@ -19,6 +22,6 @@ rm -f ../cA ../cB
 RWX_TRACE_OUT=../tA.json coverage run --rcfile="$HERE/tools/covrc" --data-file=../cA -m pytest -q -p no:cacheprovider -p rwx_trace $A > ../logA 2>&1 &
 RWX_TRACE_OUT=../tB.json coverage run --rcfile="$HERE/tools/covrc" --data-file=../cB -m pytest -q -p no:cacheprovider -p rwx_trace $B > ../logB 2>&1 &
 wait
-tail -1 ../logA ../logB
+tail -n 1 ../logA ../logB
 cd ..
 python "$HERE/tools/build_index.py" sqlglot "$HERE/sample/tests.json" "$HERE/index" cA cB -- tA.json tB.json

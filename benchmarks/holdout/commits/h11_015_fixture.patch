@@ -1,0 +1,10 @@
+diff --git a/tests/fixtures/optimizer/qualify_columns__invalid.sql b/tests/fixtures/optimizer/qualify_columns__invalid.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/qualify_columns__invalid.sql
++++ b/tests/fixtures/optimizer/qualify_columns__invalid.sql
+@@ -53,4 +53,4 @@
+ # dialect: duckdb
+ SELECT p.range FROM range(10) AS p WHERE EXISTS (SELECT 1 WHERE range > 5);
+ # dialect: duckdb
+-SELECT p.range FROM (VALUES (0), (6)) AS p(range) WHERE EXISTS (SELECT 1 FROM range(1) AS q WHERE range > 5);
++SELECT p.range FROM (VALUESa (0), (6)) AS p(range) WHERE EXISTS (SELECT 1 FROM range(1) AS q WHERE range > 5);

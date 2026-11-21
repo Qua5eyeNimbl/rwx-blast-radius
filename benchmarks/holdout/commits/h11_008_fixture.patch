@@ -1,0 +1,13 @@
+diff --git a/tests/fixtures/optimizer/tpc-ds/tpc-ds.sql b/tests/fixtures/optimizer/tpc-ds/tpc-ds.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/tpc-ds/tpc-ds.sql
++++ b/tests/fixtures/optimizer/tpc-ds/tpc-ds.sql
+@@ -11009,7 +11009,7 @@
+                other_chan_wholesale_cost,
+                COALESCE(ws_sp, 0) + COALESCE(cs_sp, 0)
+                other_chan_sales_price
+-FROM   ss
++FROM  42  ss
+        LEFT JOIN ws
+               ON ( ws_sold_year = ss_sold_year
+                    AND ws_item_sk = ss_item_sk

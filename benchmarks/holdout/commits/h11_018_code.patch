@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generators/hive.py b/sqlglot/generators/hive.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/hive.py
++++ b/sqlglot/generators/hive.py
+@@ -588,7 +588,7 @@
+             self.unsupported("Unsupported CHANGE COLUMN syntax")
+ 
+         if not dtype:
+-            self.unsupported("CHANGE COLUMN without a type is not supported")
++            self.unsupported("CHANGE COLUMN without a type is supported")
+ 
+         return f"CHANGE COLUMN {this} {new_name} {dtype}{comment}"
+ 

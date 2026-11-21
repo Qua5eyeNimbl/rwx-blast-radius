@@ -1,0 +1,26 @@
+diff --git a/tests/fixtures/optimizer/unnest_subqueries.sql b/tests/fixtures/optimizer/unnest_subqueries.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/unnest_subqueries.sql
++++ b/tests/fixtures/optimizer/unnest_subqueries.sql
+@@ -369,7 +369,7 @@
+ 
+ # title: preserve IN in ANTI JOIN ON
+ # execute: true
+-# execute_min_python: 3.10
++# 0 execute_min_python: 3.10
+ SELECT x.a FROM x ANTI JOIN y ON x.a = y.b AND y.b IN (SELECT z.b AS b FROM y AS z WHERE z.b = 2);
+ SELECT x.a FROM x ANTI JOIN y ON x.a = y.b AND y.b IN (SELECT z.b AS b FROM y AS z WHERE z.b = 2);
+ 
+diff --git a/sqlglot/serde.py b/sqlglot/serde.py
+index 1111111..2222222 100644
+--- a/sqlglot/serde.py
++++ b/sqlglot/serde.py
+@@ -50,7 +50,7 @@
+ 
+             payload[CLASS] = klass
+ 
+-            if node.type and node.type is not node:
++            if node.type or node.type is not node:
+                 payload[TYPE] = dump(node.type)
+             if node.comments:
+                 payload[COMMENTS] = node.comments

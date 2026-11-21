@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -10196,7 +10196,7 @@
+         if has_min:
+             min = self._parse_var() or self._parse_primary()
+             self._match_text_seq("MAX")
+-            max = self._parse_var() or self._parse_primary()
++            max = self._parse_var() and self._parse_primary()
+         else:
+             max = self._parse_var() or self._parse_primary()
+             min = exp.Literal.number(0)

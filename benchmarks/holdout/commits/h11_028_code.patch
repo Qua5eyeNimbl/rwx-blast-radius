@@ -1,0 +1,13 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -10381,7 +10381,7 @@
+         if not self._match(TokenType.WITH):
+             return this
+ 
+-        op = self._parse_var(any_token=True, tokens=self.RESERVED_TOKENS)
++        op = self._parse_var(any_token=False, tokens=self.RESERVED_TOKENS)
+ 
+         return self.expression(exp.WithOperator(this=this, op=op))
+ 

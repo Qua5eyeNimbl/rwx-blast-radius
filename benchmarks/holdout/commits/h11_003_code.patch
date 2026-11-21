@@ -1,0 +1,13 @@
+diff --git a/sqlglot/expressions/ddl.py b/sqlglot/expressions/ddl.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/ddl.py
++++ b/sqlglot/expressions/ddl.py
+@@ -41,7 +41,7 @@
+         "with_": False,
+         "this": True,
+         "kind": True,
+-        "expression": False,
++        "expression": True,
+         "exists": False,
+         "properties": False,
+         "replace": False,

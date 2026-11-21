@@ -112,6 +112,7 @@ def main(argv):
     req_graph = defaultdict(set)   # module -> modules it requests while importing
     req_tests = defaultdict(set)   # requested module -> tests whose context requested it
     cls_tests = defaultdict(set)
+    cls_imods = defaultdict(set)   # class -> modules whose import instantiated it
     importers = defaultdict(set)
     collect_imports = defaultdict(set)  # module -> test files whose collection imported it
     for tf in trace_files:
@@ -131,6 +132,8 @@ def main(argv):
             for c in rec.get("cls", ()):
                 if kind in ("test", "collect"):
                     cls_tests[c] |= ts
+                elif kind == "import":
+                    cls_imods[c].add(imod)
             if kind == "import":
                 for par in rec.get("importer", ()):
                     pk, pts, pmod = resolve(par)
@@ -194,6 +197,29 @@ def main(argv):
             if m.startswith("sqlglot"):
                 cls_users[f"{m}:{k.__qualname__}"] |= ts
 
+    # import-time instances: if a class change makes such an instantiation
+    # raise, the import fails and every requester of that module fails.
+    # Modules imported before the tracer could wrap __init__ (the plugin's own
+    # `import sqlglot`) are measured here with a profiler; all of them load
+    # under `import sqlglot`.
+    for c in _pretrace_instances(root):
+        cls_imods[c].add("sqlglot")
+    cls_mods = defaultdict(set)
+    for c, ms in cls_imods.items():
+        modname, qual = c.split(":", 1)
+        try:
+            obj = importlib.import_module(modname)
+            for part in qual.split("."):
+                obj = getattr(obj, part)
+            mro = obj.__mro__
+        except Exception:
+            cls_mods[c] |= ms
+            continue
+        for k in mro:
+            m = getattr(k, "__module__", "") or ""
+            if m.startswith("sqlglot"):
+                cls_mods[f"{m}:{k.__qualname__}"] |= ms
+
     lines_out = {}
     file_runtime = {}
     for rel, m in lines.items():
@@ -226,6 +252,7 @@ def main(argv):
         "reads": reads_out,
         "reads_mods": reads_mods,
         "cls_users": {c: sid(s) for c, s in cls_users.items()},
+        "cls_mods": {c: mid(ms) for c, ms in sorted(cls_mods.items())},
         "importers": {m: sorted(v) for m, v in importers.items()},
         "collect_imports": {m: sorted(v) for m, v in collect_imports.items()},
         "requirers": {m: sid(v) for m, v in requirers.items()},
@@ -237,6 +264,33 @@ def main(argv):
         json.dump(sources, fh, separators=(",", ":"))
     print(f"sets={len(sets)} mods={len(mods)} files={len(lines_out)} reads={len(reads_out)} "
           f"classes={len(cls_users)} sources={len(sources)}", file=sys.stderr)
+
+
+_PRETRACE = r"""
+import json, sys
+seen = set()
+def prof(frame, ev, arg):
+    if ev == "call" and frame.f_code.co_name == "__init__":
+        s = frame.f_locals.get("self")
+        if s is not None:
+            m = type(s).__module__ or ""
+            if m.startswith("sqlglot") and not isinstance(s, __import__("enum").Enum):
+                seen.add(m + ":" + type(s).__qualname__)
+sys.setprofile(prof)
+from sqlglot import generator, parser, tokens
+from sqlglot.dialects import dialect
+from sqlglot.expressions import core
+sys.setprofile(None)
+print(json.dumps(sorted(seen)))
+"""
+
+
+def _pretrace_instances(root):
+    """sqlglot classes instantiated while the modules the tracer loads before
+    wrapping __init__ (see rwx_trace._install_class_tracing) are imported."""
+    import subprocess
+    r = subprocess.run([sys.executable, "-c", _PRETRACE], cwd=root, capture_output=True, text=True, check=True)
+    return json.loads(r.stdout.strip().splitlines()[-1])
 
 
 if __name__ == "__main__":

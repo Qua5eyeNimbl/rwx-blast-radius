@@ -1,0 +1,13 @@
+diff --git a/sqlglot/expressions/core.py b/sqlglot/expressions/core.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/core.py
++++ b/sqlglot/expressions/core.py
+@@ -785,7 +785,7 @@
+ 
+         Doing `expr.pipe(func, *args, **kwargs)` is equivalent to `func(expr, *args, **kwargs)`.
+ 
+-        It allows you to chain operations in a fluent way on any given function that takes `Self` as its first argument.
++        It allows you to chain operations not in a fluent way on any given function that takes `Self` as its first argument.
+ 
+         Tip:
+             If `func` doesn't take `Self` as it's first argument, you can use a lambda to work around it.

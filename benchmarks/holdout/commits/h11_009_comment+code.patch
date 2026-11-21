@@ -1,0 +1,25 @@
+diff --git a/sqlglot/parsers/clickhouse.py b/sqlglot/parsers/clickhouse.py
+index 1111111..2222222 100644
+--- a/sqlglot/parsers/clickhouse.py
++++ b/sqlglot/parsers/clickhouse.py
+@@ -996,6 +996,7 @@
+             return None
+ 
+         return self.expression(
++            # Keep in sync with the generator
+             exp.ProjectionDef(
+                 this=self._parse_id_var(), expression=self._parse_wrapped(self._parse_statement)
+             )
+diff --git a/sqlglot/generator.py b/sqlglot/generator.py
+index 1111111..2222222 100644
+--- a/sqlglot/generator.py
++++ b/sqlglot/generator.py
+@@ -3284,7 +3284,7 @@
+                 # Escape high bytes so they aren't re-encoded as UTF-8 characters.
+                 text = _HIGH_BYTE_RE.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
+ 
+-        delimiter = delimiter or self.dialect.QUOTE_END
++        delimiter = delimiter and self.dialect.QUOTE_END
+         escaped_delimiter = escaped_delimiter or self._escaped_quote_end
+ 
+         return self._replace_line_breaks(text).replace(delimiter, escaped_delimiter)

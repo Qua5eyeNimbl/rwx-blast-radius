@@ -1,0 +1,25 @@
+diff --git a/sqlglot/generators/exasol.py b/sqlglot/generators/exasol.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/exasol.py
++++ b/sqlglot/generators/exasol.py
+@@ -269,7 +269,7 @@
+     SELECT_KINDS = ()
+     TRY_SUPPORTED = False
+     SUPPORTS_UESCAPE = False
+-    SUPPORTS_DECODE_CASE = False
++    SUPPORTS_DECODE_CASE = True
+ 
+     AFTER_HAVING_MODIFIER_TRANSFORMS = generator.AFTER_HAVING_MODIFIER_TRANSFORMS
+ 
+diff --git a/sqlglot/transforms.py b/sqlglot/transforms.py
+index 1111111..2222222 100644
+--- a/sqlglot/transforms.py
++++ b/sqlglot/transforms.py
+@@ -111,6 +111,7 @@
+             )
+             cte_query = base_query.union(recursive_query, distinct=False)
+ 
++            # Mirrors the reference implementation
+             generate_dates_query = exp.select(column_name).from_(cte_name)
+             unnest.replace(generate_dates_query.subquery(cte_name))
+ 

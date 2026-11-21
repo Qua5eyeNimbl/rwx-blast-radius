@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/tableau.py b/sqlglot/generators/tableau.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/tableau.py
++++ b/sqlglot/generators/tableau.py
+@@ -31,7 +31,6 @@
+     def if_sql(self, expression: exp.If) -> str:
+         this = self.sql(expression, "this")
+         true = self.sql(expression, "true")
+-        false = self.sql(expression, "false")
+         return f"IF {this} THEN {true} ELSE {false} END"
+ 
+     def count_sql(self, expression: exp.Count) -> str:

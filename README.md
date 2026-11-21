@@ -35,7 +35,9 @@ build runs the pinned suite once under coverage.py with a tracing plugin
   collection kept in separate contexts, and class/module fixtures (`setUpClass`)
   credited to every test of the class;
 - the files each test opened (fixtures, and source files read as data);
-- every sqlglot class each test instantiated (with MRO), incl. dialect lookups;
+- every sqlglot class each test instantiated (with MRO), incl. dialect lookups,
+  and the modules whose *import* instantiated it (e.g. SQL templates parsed in
+  a class body);
 - every module each test requested via `import` (cached or not).
 
 The suite's `ProcessPoolExecutor` work is run in-process (with a pickle round
@@ -57,6 +59,8 @@ At runtime, for each patch:
      executing a *use* of the value (followed through exact pass-throughs) when
      every reference is traceable, or to tests that built the expression type
      for dicts keyed by expression classes (`TRANSFORMS`, type metadata);
+   - class constant of a class some module instantiates while importing →
+     plus every test that imports that module (the import can now raise);
    - non-literal import-time edits → all importers;
    - data files → tests that read them; new/removed files → directory readers.
 4. Anything unparseable/unknown falls back to a broad, safe set.

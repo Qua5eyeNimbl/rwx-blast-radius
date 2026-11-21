@@ -1,0 +1,25 @@
+diff --git a/sqlglot/tokenizer_core.py b/sqlglot/tokenizer_core.py
+index 1111111..2222222 100644
+--- a/sqlglot/tokenizer_core.py
++++ b/sqlglot/tokenizer_core.py
+@@ -286,6 +286,7 @@
+     DETACH = auto()
+     DISCONNECT = auto()
+     DICTIONARY = auto()
++    # Kept for backwards compatibility
+     DISTINCT = auto()
+     DISTRIBUTE_BY = auto()
+     DIV = auto()
+diff --git a/tests/fixtures/optimizer/optimizer.sql b/tests/fixtures/optimizer/optimizer.sql
+index 1111111..2222222 100644
+--- a/tests/fixtures/optimizer/optimizer.sql
++++ b/tests/fixtures/optimizer/optimizer.sql
+@@ -575,7 +575,7 @@
+       IFF("unioned"."uploaded_at" >= CAST('2022-06-16' AS TIMESTAMP), 'workday', 'bamboohr') = "unioned"."source_system",
+       1,
+       0
+-    ) DESC, 1
++ a   ) DESC, 1
+   ) = 1;
+ 
+ # title: pivoted source with explicit selections

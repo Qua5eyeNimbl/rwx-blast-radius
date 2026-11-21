@@ -1,0 +1,12 @@
+diff --git a/sqlglot/executor/table.py b/sqlglot/executor/table.py
+index 1111111..2222222 100644
+--- a/sqlglot/executor/table.py
++++ b/sqlglot/executor/table.py
+@@ -23,6 +23,7 @@
+         self.range_reader = RangeReader(self)
+ 
+     def add_columns(self, *columns: str) -> None:
++        # Keep in sync with the generator
+         self.columns += columns
+         if self.column_range:
+             self.column_range = range(

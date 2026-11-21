@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -89,7 +89,6 @@
+         expression = self._parse_bitwise()
+         if reverse_args:
+             this, expression = expression, this
+-        return self._parse_escape(self.expression(expr_type(this=this, expression=expression)))
+ 
+     return _parse_binary_range
+ 

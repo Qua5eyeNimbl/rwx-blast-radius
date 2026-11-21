@@ -125,6 +125,29 @@ class TestSelector(unittest.TestCase):
         p = mkpatch("sqlglot/not_a_module.py", 1, ["x = 1"], ["x = 2"])
         self.assertTrue(self.selector.for_patch(p))
 
+    def test_class_constant_seen_by_import_time_instances(self):
+        # DuckDBGenerator parses SQL templates in its class body, so a Join
+        # built at import time breaks every importer of the duckdb generator
+        # (all of tests/dialects via test_dialect.py) when Join's required
+        # args change.  Generated holdout patch h11_021; label from the suite.
+        p = """diff --git a/sqlglot/expressions/query.py b/sqlglot/expressions/query.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/query.py
++++ b/sqlglot/expressions/query.py
+@@ -701,7 +701,7 @@
+         "method": False,
+         "global_": False,
+         "hint": False,
+-        "match_condition": False,
++        "match_condition": True,
+         "nearest": False,
+         "directed": False,
+         "expressions": False,
+"""
+        sel = self.selector.for_patch(p)
+        for f in ("tests/dialects/test_mysql.py", "tests/dialects/test_dialect.py"):
+            self.assertLessEqual(self.selector.by_file[f], sel, f)
+
     def test_selected_numbers_are_valid(self):
         for patch in sorted((ROOT / "sample" / "commits").glob("*.patch")):
             with self.subTest(patch=patch.name):

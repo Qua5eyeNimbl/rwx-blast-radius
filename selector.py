@@ -409,9 +409,26 @@ class _IsToEq(ast.NodeTransformer):
 
 
 def _normalised(node) -> str:
-    import copy
-
-    return _dump(_IsToEq().visit(copy.deepcopy(node)))
+    """_dump of `node` with _IsToEq applied, without copying the tree: the
+    Compare ops are swapped in place and restored before returning."""
+    saved = []
+    try:
+        for n in ast.walk(node):
+            if isinstance(n, ast.Compare):
+                operands = [n.left] + list(n.comparators)
+                ops = []
+                for i, op in enumerate(n.ops):
+                    if isinstance(op, (ast.Is, ast.IsNot)) and (
+                        _is_singleton_operand(operands[i]) or _is_singleton_operand(operands[i + 1])
+                    ):
+                        op = ast.Eq() if isinstance(op, ast.Is) else ast.NotEq()
+                    ops.append(op)
+                saved.append((n, n.ops))
+                n.ops = ops
+        return _dump(node)
+    finally:
+        for n, ops in saved:
+            n.ops = ops
 
 
 def _equivalent_stmt(a, b) -> bool:
@@ -691,6 +708,18 @@ class Index:
         sid = self.ix["cls_users"].get(f"{module}:{qual}")
         return set(self.tset(sid)) if sid is not None else set()
 
+    def import_instancers(self, module: str, qual: str) -> set:
+        """Modules whose import instantiated class module:qual (or a
+        subclass): a change that makes the instantiation raise breaks them."""
+        mid = self.ix.get("cls_mods", {}).get(f"{module}:{qual}")
+        return set(self.mods[mid]) if mid is not None else set()
+
+    def import_broken_users(self, mods) -> set:
+        out = set()
+        for m in mods:
+            out |= self.module_users(m, deep=True) | self.requirers(m)
+        return out
+
     def classes_in(self, module: str):
         pre = module + ":"
         return [k for k in self.ix["cls_users"] if k.startswith(pre)]
@@ -839,6 +868,9 @@ class Selector:
         if ch.kind == "class":
             q = ch.unit.split("#", 1)[0]
             out |= ix.class_users(mod, q)
+            # instances built while some module imports (e.g. SQL templates
+            # parsed in a class body) see the change at import time
+            out |= ix.import_broken_users(self._nested_instancers(mod, q))
             # tests that executed any method of the class (or nested class)
             out |= self._class_runtime(rel, mod, q)
             # subclass users elsewhere are included via MRO in class_users;
@@ -906,8 +938,37 @@ class Selector:
             out |= users
         if ch.kind == "class":
             out &= self.index.class_users(mod, ch.unit.split("#", 1)[0]) | self._nested_users(mod, ch.unit)
+            # an import that builds both the owner and such an expression
+            owner = self._nested_instancers(mod, ch.unit.split("#", 1)[0])
+            keyed = set()
+            for k in keys:
+                keyed |= self._expr_class_instancers(k)
+            out |= self.index.import_broken_users(owner & keyed)
         else:
             out &= self.index.module_users(mod, deep=True)
+        return out
+
+    def _expr_class_instancers(self, name: str) -> set:
+        out = set()
+        for k, mid in self.index.ix.get("cls_mods", {}).items():
+            m, _, q = k.partition(":")
+            if q == name and m.startswith("sqlglot.expressions"):
+                out.update(self.index.mods[mid])
+        return out
+
+    def _nested_instancers(self, mod, unit) -> set:
+        """import_instancers of the class and of classes nested under its
+        outermost class (metaclass-copied attributes, see _nested_users)."""
+        ix = self.index
+        q = unit.split("#", 1)[0]
+        outer = q.split(".", 1)[0]
+        out = ix.import_instancers(mod, q)
+        pre = mod + ":"
+        for k in ix.ix.get("cls_mods", {}):
+            if k.startswith(pre):
+                cq = k[len(pre):]
+                if cq == outer or cq.startswith(outer + "."):
+                    out |= ix.import_instancers(mod, cq)
         return out
 
     def _nested_users(self, mod, unit):
@@ -974,6 +1035,30 @@ class Selector:
                     child._rwx_parent = parent
         return t
 
+    _names_cache: dict = {}
+
+    def _named_nodes(self, frel):
+        """identifier -> nodes that can mention it (Name, Attribute, str
+        Constant, arg, keyword), in ast.walk order; built once per file."""
+        d = self._names_cache.get(frel)
+        if d is None:
+            d = self._names_cache[frel] = {}
+            for n in ast.walk(self._tree(frel)):
+                if isinstance(n, ast.Name):
+                    k = n.id
+                elif isinstance(n, ast.Attribute):
+                    k = n.attr
+                elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+                    k = n.value
+                elif isinstance(n, ast.arg):
+                    k = n.arg
+                elif isinstance(n, ast.keyword) and n.arg:
+                    k = n.arg
+                else:
+                    continue
+                d.setdefault(k, []).append(n)
+        return d
+
     def _trace_uses(self, start_names):
         ix = self.index
         src = ix.sources()
@@ -988,8 +1073,7 @@ class Selector:
             if len(files) > 25:
                 return None
             for frel in files:
-                tree = self._tree(frel)
-                for n in ast.walk(tree):
+                for n in self._named_nodes(frel).get(name, ()):
                     hit = ((isinstance(n, ast.Name) and n.id == name)
                            or (isinstance(n, ast.Attribute) and n.attr == name)
                            or (isinstance(n, ast.Constant) and n.value == name))

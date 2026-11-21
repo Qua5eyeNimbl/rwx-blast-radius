@@ -113,7 +113,8 @@ def main(argv):
         name = os.path.basename(p).rsplit(".", 1)[0]
         if name in res:
             continue
-        r = run(root, tests_json, p, workers=int(os.environ.get("GT_WORKERS", "1")))
+        r = run(root, tests_json, p, workers=int(os.environ.get("GT_WORKERS", "1")),
+                timeout=int(os.environ.get("GT_TIMEOUT", "900")))
         res[name] = r
         print(name, r["status"], len(r["failing"]), r.get("seconds"), file=sys.stderr, flush=True)
         with open(out_json + ".tmp", "w") as fh:

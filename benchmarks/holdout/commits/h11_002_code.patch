@@ -1,0 +1,13 @@
+diff --git a/sqlglot/optimizer/simplify.py b/sqlglot/optimizer/simplify.py
+index 1111111..2222222 100644
+--- a/sqlglot/optimizer/simplify.py
++++ b/sqlglot/optimizer/simplify.py
+@@ -158,7 +158,7 @@
+ 
+     if (
+         Dialect.get_or_raise(dialect).REQUIRES_PARENTHESIZED_STRUCT_ACCESS
+-        and isinstance(parent, exp.Dot)
++        or isinstance(parent, exp.Dot)
+         and (isinstance(parent.right, (exp.Identifier, exp.Star)))
+     ):
+         return expression

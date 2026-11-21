@@ -1,0 +1,12 @@
+diff --git a/sqlglot/parser.py b/sqlglot/parser.py
+index 1111111..2222222 100644
+--- a/sqlglot/parser.py
++++ b/sqlglot/parser.py
+@@ -3735,6 +3735,7 @@
+     def _parse_insert(self) -> exp.Insert | exp.MultitableInserts:
+         comments: list[str] = []
+         hint = self._parse_hint()
++        # Fast path
+         overwrite = self._match(TokenType.OVERWRITE)
+         ignore = self._match(TokenType.IGNORE)
+         local = self._match_text_seq("LOCAL")

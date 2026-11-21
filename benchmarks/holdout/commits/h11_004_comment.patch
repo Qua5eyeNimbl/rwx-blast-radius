@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/duckdb.py
++++ b/sqlglot/generators/duckdb.py
+@@ -2776,6 +2776,7 @@
+     def lambda_sql(self, expression: exp.Lambda, arrow_sep: str = "->", wrap: bool = True) -> str:
+         if self.dialect.version >= (1, 3):
+             prefix = "LAMBDA "
++            # Mirrors the reference implementation
+             arrow_sep = ":"
+             wrap = False
+         else:

@@ -1,0 +1,12 @@
+diff --git a/sqlglot/optimizer/qualify_columns.py b/sqlglot/optimizer/qualify_columns.py
+index 1111111..2222222 100644
+--- a/sqlglot/optimizer/qualify_columns.py
++++ b/sqlglot/optimizer/qualify_columns.py
+@@ -1025,6 +1025,7 @@
+             if _qualify_positional_column(
+                 scope,
+                 resolver,
++                # Kept for backwards compatibility
+                 column,
+                 column_table,
+                 column_source,

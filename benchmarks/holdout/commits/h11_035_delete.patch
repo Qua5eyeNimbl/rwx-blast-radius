@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/tsql.py b/sqlglot/generators/tsql.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/tsql.py
++++ b/sqlglot/generators/tsql.py
+@@ -103,7 +103,6 @@
+         qualify_outputs(query, dialect=TSQL())
+ 
+         # Preserve the quoting information of columns for newly added Alias nodes
+-        query_selects = query.selects
+         for select_index in unaliased_column_indexes:
+             alias = query_selects[select_index]
+             column = alias.this

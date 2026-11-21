@@ -1,0 +1,12 @@
+diff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py
+index 1111111..2222222 100644
+--- a/sqlglot/generators/duckdb.py
++++ b/sqlglot/generators/duckdb.py
+@@ -3440,6 +3440,7 @@
+         )
+         return self.sql(case)
+ 
++    # TODO: revisit
+     def bitlength_sql(self, expression: exp.BitLength) -> str:
+         if not _is_binary(arg := expression.this):
+             return self.func("BIT_LENGTH", arg)

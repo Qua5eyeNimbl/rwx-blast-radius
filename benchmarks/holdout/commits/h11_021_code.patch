@@ -1,0 +1,13 @@
+diff --git a/sqlglot/expressions/query.py b/sqlglot/expressions/query.py
+index 1111111..2222222 100644
+--- a/sqlglot/expressions/query.py
++++ b/sqlglot/expressions/query.py
+@@ -701,7 +701,7 @@
+         "method": False,
+         "global_": False,
+         "hint": False,
+-        "match_condition": False,
++        "match_condition": True,
+         "nearest": False,
+         "directed": False,
+         "expressions": False,

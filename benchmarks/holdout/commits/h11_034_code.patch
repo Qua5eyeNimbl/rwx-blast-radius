@@ -1,0 +1,13 @@
+diff --git a/sqlglot/generator.py b/sqlglot/generator.py
+index 1111111..2222222 100644
+--- a/sqlglot/generator.py
++++ b/sqlglot/generator.py
+@@ -2119,7 +2119,7 @@
+     def indexparameters_sql(self, expression: exp.IndexParameters) -> str:
+         using = self.sql(expression, "using")
+         using = f" USING {using}" if using else ""
+-        columns = self.expressions(expression, key="columns", flat=True)
++        columns = self.expressions(expression, key="columns", flat=False)
+         columns = f"({columns})" if columns else ""
+         partition_by = self.expressions(expression, key="partition_by", flat=True)
+         partition_by = f" PARTITION BY {partition_by}" if partition_by else ""
