@@ -43,15 +43,18 @@ def module_name(rel: str) -> str:
     return mod[: -len(".__init__")] if mod.endswith(".__init__") else mod
 
 
-def patched_sources(files, apply_hunks) -> dict | None:
+def patched_sources(files, apply_hunks, data_ok=()) -> dict | None:
     """{rel: new_text} when every file of the patch is a modified .py file of
-    the pinned tree that the patch applies to; otherwise None (not eligible)."""
+    the pinned tree (or a text file in `data_ok`) that the patch applies to;
+    otherwise None (not eligible).  Opening any of them in the child taints."""
     out = {}
     for fd in files:
         if fd.binary or fd.old is None or fd.new is None or fd.old != fd.new:
             return None
         rel = fd.old
-        if not rel.endswith(".py") or not (rel.startswith("sqlglot/") or rel.startswith("tests/")):
+        if rel in data_ok:
+            pass
+        elif not rel.endswith(".py") or not (rel.startswith("sqlglot/") or rel.startswith("tests/")):
             return None
         path = os.path.join(SQ, rel)
         try:
@@ -66,6 +69,8 @@ def patched_sources(files, apply_hunks) -> dict | None:
 # ===================================================================== child
 REPLAY_EXPECTED = os.environ.get("RWX_REPLAY_EXPECTED",
                                  os.path.join(os.path.dirname(os.path.abspath(__file__)), "replay_expected.json"))
+STATE_EXPECTED = os.environ.get("RWX_STATE_EXPECTED",
+                                os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_expected.json"))
 
 
 def _child(tests, patched, wfd, replays=()):
@@ -98,8 +103,9 @@ def _child(tests, patched, wfd, replays=()):
         for rel, text in patched.items():
             p = os.path.join(SQ, rel)
             abs_patched[os.path.realpath(p)] = rel
-            mods[module_name(rel)] = (p, text)
-            linecache.cache[p] = (len(text), None, text.splitlines(True), p)
+            if rel.endswith(".py"):
+                mods[module_name(rel)] = (p, text)
+                linecache.cache[p] = (len(text), None, text.splitlines(True), p)
 
         class Loader(importlib.machinery.SourceFileLoader):
             def __init__(self, fullname, path, text):
@@ -253,10 +259,28 @@ def _child(tests, patched, wfd, replays=()):
                 super().addUnexpectedSuccess(test)
                 self.bad.add(test.id())
 
-        for num, kind, forced, secs, max_s in replays:
+        state_ok = {}
+        for num, kind, forced, secs, max_s, *more in replays:
             try:
                 import json as _json
                 import replay as _replay
+                allowed = more[0] if more else None
+                if allowed is not None:
+                    # non-function changes: the patched imports may differ
+                    # from the pinned ones only in the changed bindings
+                    akey = tuple(sorted(allowed))
+                    if akey not in state_ok:
+                        with real_open(STATE_EXPECTED, encoding="utf-8") as fh:
+                            state_ok[akey] = _replay.state_check(_json.load(fh), set(akey))
+                    sok, skey = state_ok[akey]
+                    if not sok:
+                        out.write(f"K {num} state:{skey[:120]}\n")
+                        continue
+                fixtures = more[1] if len(more) > 1 else ()
+                if fixtures and not all(_replay.fixture_loads(patched[rel]) for rel in fixtures):
+                    # a fixture only the class setup loads: it must still load
+                    out.write(f"K {num} fixture-load\n")
+                    continue
                 with real_open(REPLAY_EXPECTED, encoding="utf-8") as fh:
                     expected = _json.load(fh)[kind]
                 ok, why = _replay.check(kind, expected, forced, secs, max_s)

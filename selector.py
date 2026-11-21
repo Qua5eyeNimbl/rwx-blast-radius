@@ -1804,6 +1804,15 @@ def _cost_ms(ids, lookup) -> int:
 
 
 REPLAY_EST_S = {"tpcds_execute": 3.0, "tpch_execute": 0.3, "tpch_optimized": 0.2}  # child CPU, measured
+STATE_CHECK_S = 0.45  # child CPU of replay.state_check (import all + digest), measured
+REPLAY_TEST_FILES = ("tests/test_executor.py", "tests/helpers.py", "tests/__init__.py")
+_TPCDS = "tests/test_executor.py::TestExecutor::test_execute_tpcds"
+_TPCH = ("tests/test_executor.py::TestExecutor::test_execute_tpch",
+         "tests/test_executor.py::TestExecutor::test_optimized_tpch")
+# fixtures TestExecutor.setUpClass loads for every test, used only by some:
+# for the others the replay needs only that loading them does not raise
+FIXTURE_SETUP_ONLY = {"tests/fixtures/optimizer/tpc-h/tpc-h.sql": (_TPCDS,),
+                      "tests/fixtures/optimizer/tpc-ds/tpc-ds.sql": _TPCH}
 
 
 def _replay_cov():
@@ -1814,36 +1823,96 @@ def _replay_cov():
         return None
 
 
-def replay_eligible(select, files, proxied_ids, lookup, cov) -> dict:
+def _bound_names(ch):
+    """Names a class/module-level statement change (re)binds, or None when
+    it is not a plain binding.  For a signature change: the function name."""
+    names = set()
+    for node in (ch.node, ch.new_node):
+        if node is None:
+            continue
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets = [node.target]
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+            continue
+        else:
+            return None
+        for t in targets:
+            if not isinstance(t, ast.Name):
+                return None
+            names.add(t.id)
+    if not names:
+        return None
+    for n in names:
+        if n.startswith("__") or n.endswith("_sql"):
+            return None  # protocol / dispatched-by-string names
+    return names
+
+
+def replay_eligible(select, files, proxied_ids, lookup, cov):
     """Proxied tests whose outcome the replay decides for this patch, mapped
-    to the query positions that must be re-executed for real.  Requires that
-    every change is a statement inside a function body of a sqlglot module,
-    that none of it runs at import time, and that none of it is executed by
-    the test's shared phase 2 (class fixtures) on the pinned tree."""
+    to the query positions that must be re-executed for real, and the names
+    the patched imports may rebind (None: function bodies only).
+
+    Every change must be in a sqlglot module and be either a statement in a
+    function body that never runs at import, or (outside sqlglot/executor/)
+    a class/module-level binding or a signature change whose every
+    reference (traced through pass-throughs) runs only after import.  The
+    references, like changed function lines, must not be executed by the
+    test's shared phase 2 on the pinned tree; the queries whose phase 2
+    executes them are re-executed.  For bindings the child also checks that
+    the patched imports changed nothing but entries bound to those names."""
     if not proxied_ids or cov is None or select is None:
-        return {}
+        return {}, None, ()
     spans = []
+    allowed = None
+    fixtures = []
+    ids_ok = None
     src = select.index.sources()
     for fd in files:
         rel = fd.old
-        if not rel.startswith("sqlglot/"):
-            return {}
+        if rel in FIXTURE_SETUP_ONLY and fd.new == rel and not fd.binary:
+            # a fixture the proxied test's class setup loads but never uses
+            fixtures.append(rel)
+            ok = FIXTURE_SETUP_ONLY[rel]
+            ids_ok = set(ok) if ids_ok is None else ids_ok & set(ok)
+            continue
+        if not rel or fd.new != rel or not rel.startswith("sqlglot/") or not rel.endswith(".py"):
+            return {}, None, ()
         base = src.get(rel)
         if base is None:
-            return {}
+            return {}, None, ()
         try:
             new_src = apply_hunks(base, fd.hunks)
             changes = diff_module(base, new_src, fd.hunks)
         except (ValueError, SyntaxError):
-            return {}
+            return {}, None, ()
         for ch in changes:
-            if ch.kind != "function":
-                return {}
-            for a, b in ch.lines:
-                _, imods = select.index.line_tests(rel, a, b)
+            if ch.kind == "function":
+                for a, b in ch.lines:
+                    _, imods = select.index.line_tests(rel, a, b)
+                    if imods:
+                        return {}, None, ()
+                    spans.append((rel, a, b))
+                continue
+            if ch.kind not in ("class", "module", "defaults") or rel.startswith("sqlglot/executor/"):
+                return {}, None, ()
+            names = _bound_names(ch)
+            if names is None:
+                return {}, None, ()
+            uses = select._trace_uses(names, every_ref=True)
+            if uses is None:
+                return {}, None, ()
+            for frel, lno in uses:
+                if not frel.startswith("sqlglot/") and (frel in REPLAY_TEST_FILES or not frel.startswith("tests/")):
+                    return {}, None, ()  # the proxied tests' own code: not in the coverage
+                _, imods = select.index.line_tests(frel, lno, lno)
                 if imods:
-                    return {}
-                spans.append((rel, a, b))
+                    return {}, None, ()  # read while importing: derived state
+                spans.append((frel, lno, lno))
+            allowed = (allowed or set()) | names
 
     def hit(lines):
         return any(any(a <= ln <= b for ln in lines.get(rel, ())) for rel, a, b in spans)
@@ -1851,10 +1920,10 @@ def replay_eligible(select, files, proxied_ids, lookup, cov) -> dict:
     out = {}
     for n in proxied_ids:
         c = cov.get(lookup[n]["id"])
-        if c is None or hit(c["shared"]):
+        if c is None or hit(c["shared"]) or (ids_ok is not None and lookup[n]["id"] not in ids_ok):
             continue
         out[n] = sorted(int(q) for q, lines in c["per"].items() if hit(lines))
-    return out
+    return out, allowed, tuple(fixtures)
 
 
 def verify(chosen, lookup, select=None):
@@ -1879,22 +1948,23 @@ def verify(chosen, lookup, select=None):
             files = parse_patch(text)
         except ValueError:
             continue
-        patched = runner.patched_sources(files, apply_hunks)
+        patched = runner.patched_sources(files, apply_hunks, FIXTURE_SETUP_ONLY)
         if patched is None:
             continue
         proxied = {n for n in ids if n in proxy_kind}
-        elig = {}
+        elig, allowed, fixtures = {}, None, ()
         if proxied:
             if cov is None:
                 cov = _replay_cov() or {}
-            elig = replay_eligible(select, files, proxied, lookup, cov)
+            elig, allowed, fixtures = replay_eligible(select, files, proxied, lookup, cov)
         base_ms = _cost_ms(ids, lookup)
         replays = []
         keep = ids
         if elig:
             rest = ids - set(elig)
             save_s = (base_ms - _cost_ms(rest, lookup)) / 1000
-            r_est = sum(REPLAY_EST_S[proxy_kind[n]] for n in elig) * VERIFY_CPU_SCALE
+            r_est = (sum(REPLAY_EST_S[proxy_kind[n]] for n in elig)
+                     + (STATE_CHECK_S if allowed is not None else 0)) * VERIFY_CPU_SCALE
             if VERIFY_ALL or r_est <= VERIFY_GAIN_FRAC * save_s:
                 secs_of = {n: cov[lookup[n]["id"]]["secs"] for n in elig}
                 max_s = 600.0 if VERIFY_ALL else VERIFY_REEXEC_FRAC * save_s / VERIFY_CPU_SCALE
@@ -1903,9 +1973,12 @@ def verify(chosen, lookup, select=None):
                     forced = elig[n]
                     if forced and 1.5 + sum(secs_of[n].get(str(q), 1.0) for q in forced) > max_s:
                         continue  # re-executing what the change reaches costs more than it saves
-                    replays.append((n, proxy_kind[n], forced, secs_of[n], max_s))
+                    replays.append((n, proxy_kind[n], forced, secs_of[n], max_s,
+                                    None if allowed is None else sorted(allowed), list(fixtures)))
                 keep = ids - {r[0] for r in replays}
         r_tests = keep - proxied
+        if any(not rel.endswith(".py") for rel in patched):
+            r_tests = set()  # data files may be read natively (not through open())
         run_s = sum(lookup[n]["seconds"] for n in r_tests)
         files_c = {lookup[n]["file"] for n in r_tests}
         est = (VERIFY_OVERHEAD_S + run_s + sum(VERIFY_CLASS_SETUP_S.get(f, 0) for f in files_c)) * VERIFY_CPU_SCALE
@@ -1919,7 +1992,8 @@ def verify(chosen, lookup, select=None):
             continue
         tests = sorted((lookup[n] for n in r_tests), key=lambda t: t["number"])
         rp = replays
-        budget = 600.0 if VERIFY_ALL else 4.0 + 3.0 * (run_s + sum(REPLAY_EST_S[r[1]] + r[4] for r in rp))
+        budget = 600.0 if VERIFY_ALL else 4.0 + 3.0 * (run_s + sum(REPLAY_EST_S[r[1]] + r[4] for r in rp)
+                                                        + (STATE_CHECK_S if allowed is not None and rp else 0))
         jobs.append((i, tests, patched, budget, rp))
     if not jobs:
         return chosen

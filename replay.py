@@ -18,7 +18,12 @@ selector against `index/replay_cov.json`, which is built from the pinned
 commit), phase 2 starts from identical inputs and runs identical code, so the
 test's outcome equals its pinned outcome (pass).  The selector only uses this
 when every change is a statement inside a function body that does not run at
-import time.
+import time, or a class/module-level binding (or signature) whose every
+reference runs after import -- those references then play the role of the
+changed lines, and `state_check` proves that the patched imports changed no
+other module or class attribute (`flat_state`, pinned at build time) -- or a
+TPC fixture that the class setup loads for the test without using it
+(`fixture_loads`).
 
 Digests are computed by walking object attributes directly, never by calling
 methods of the (possibly patched) sqlglot objects.
@@ -27,8 +32,11 @@ methods of the (possibly patched) sqlglot objects.
 from __future__ import annotations
 
 import enum
+import functools
 import hashlib
+import logging
 import pickle
+import re
 import types
 
 PROXIES = {
@@ -115,47 +123,80 @@ def _digest(obj) -> str:
 # ------------------------------------------------------------ module state
 _CLASS_SKIP = frozenset(("__dict__", "__weakref__", "__doc__", "__module__", "__qualname__",
                          "__firstlineno__", "__static_attributes__"))
+_MOD_SKIP = frozenset(("__builtins__", "__cached__", "__file__", "__loader__", "__spec__", "__doc__",
+                       "__path__"))
 
 
 class _StateDigest(_Digest):
-    """Digest of what a module's import produced: its globals, and for the
-    classes it defines, their bases and attributes.  A function is its name
-    and default values (its body is covered by line coverage, not here)."""
-
-    def __init__(self, module_name):
-        super().__init__()
-        self.module_name = module_name
+    """Digest of state an import produced.  Classes are referred to by name
+    (each class attribute is its own entry of `flat_state`); a function is
+    its name, signature, defaults and closure contents (its body is covered
+    by line coverage, not here)."""
 
     def _func(self, f):
-        parts = ["fn", getattr(f, "__module__", ""), getattr(f, "__qualname__", "?")]
-        parts.append(self.of(getattr(f, "__defaults__", None)))
-        parts.append(self.of(getattr(f, "__kwdefaults__", None)))
+        c = f.__code__
+        n = c.co_argcount + c.co_kwonlyargcount + bool(c.co_flags & 4) + bool(c.co_flags & 8)
+        parts = ["fn", getattr(f, "__module__", "") or "", f.__qualname__, str(c.co_posonlyargcount),
+                 str(c.co_argcount), str(c.co_kwonlyargcount), str(c.co_flags & 0x0F),
+                 ",".join(c.co_varnames[:n])]
+        parts.append(self.of(f.__defaults__))
+        parts.append(self.of(f.__kwdefaults__))
+        cells = []
+        for cell in f.__closure__ or ():
+            try:
+                cells.append(self.of(cell.cell_contents))
+            except ValueError:
+                cells.append("empty")
+        parts.append(",".join(cells))
+        wrapped = f.__dict__.get("__wrapped__")
+        if wrapped is not None:
+            parts.append("wrapped=" + self.of(wrapped))
         return "\x1f".join(parts)
 
+    def _memo(self, obj, make):
+        k = id(obj)
+        d = self.memo.get(k)
+        if d is not None:
+            return d
+        if k in self.active:
+            return f"cycle:{type(obj).__qualname__}"
+        self.active.add(k)
+        try:
+            parts = make()
+        finally:
+            self.active.discard(k)
+        d = hashlib.blake2b("\x1f".join(parts).encode("utf-8", "surrogatepass"), digest_size=16).hexdigest()
+        self.memo[k] = d
+        return d
+
     def of(self, obj):
+        t = type(obj)
+        if t is dict and any(type(k) not in _ATOMS for k in obj):
+            # dicts keyed by classes are often built by iterating a set of
+            # classes, whose order is per process (id hashing): the pinned
+            # run cannot depend on it, so digest them order-insensitively
+            return self._memo(obj, lambda: ["dict~"] + sorted(self.of(a) + "=" + self.of(b)
+                                                             for a, b in obj.items()))
+        if (t is tuple or t is list) and obj and all(isinstance(x, type) for x in obj):
+            # tuple({ClassA, ClassB, ...}) for isinstance checks: the same
+            # per-process order as above
+            return "classes~" + ",".join(sorted(self.of(x) for x in obj))
+        if t is types.MappingProxyType:
+            return "proxy:" + self.of(dict(obj))
         if isinstance(obj, types.FunctionType):
             return self._func(obj)
         if isinstance(obj, (staticmethod, classmethod)):
-            return type(obj).__name__ + ":" + self.of(obj.__func__)
+            return t.__name__ + ":" + self.of(obj.__func__)
         if isinstance(obj, property):
             return "property:" + ",".join(self.of(f) for f in (obj.fget, obj.fset, obj.fdel))
-        if isinstance(obj, type) and obj.__module__ == self.module_name:
-            k = id(obj)
-            d = self.memo.get(k)
-            if d is not None:
-                return d
-            if k in self.active:
-                return f"cycle:{obj.__qualname__}"
-            self.active.add(k)
-            parts = ["class", obj.__qualname__, type(obj).__qualname__]
-            parts += [f"{b.__module__}.{b.__qualname__}" for b in obj.__bases__]
-            for name, v in obj.__dict__.items():
-                if name not in _CLASS_SKIP:
-                    parts.append(name + "=" + self.of(v))
-            self.active.discard(k)
-            d = hashlib.blake2b("\x1f".join(parts).encode("utf-8", "surrogatepass"), digest_size=16).hexdigest()
-            self.memo[k] = d
-            return d
+        if isinstance(obj, functools.partial):
+            return self._memo(obj, lambda: ["partial", self.of(obj.func), self.of(obj.args),
+                                            self.of(obj.keywords)])
+        if isinstance(obj, re.Pattern):
+            return f"re:{obj.pattern!r}:{obj.flags}"
+        if isinstance(obj, logging.Logger):
+            # its manager holds every logger of the process (other libraries')
+            return f"logger:{obj.name}:{obj.level}:{obj.propagate}:{obj.disabled}"
         return super().of(obj)
 
 
@@ -172,29 +213,102 @@ def module_names(root) -> list:
     return sorted(n for n in names if not n.endswith("__main__"))
 
 
-def import_states(names) -> dict:
-    """Import the modules in this fixed order and digest each one's state.
-    A module whose import raises maps to "raised:<Exception>"."""
+def _flat_class(D, m, cls, out, seen):
+    if id(cls) in seen:
+        return
+    seen.add(id(cls))
+    q = cls.__qualname__
+    out[f"{m}:{q}"] = "class:" + ",".join(f"{b.__module__}.{b.__qualname__}" for b in (type(cls),) + cls.__bases__)
+    for k, v in cls.__dict__.items():
+        if k in _CLASS_SKIP:
+            continue
+        if isinstance(v, type) and v.__module__ == m and v.__qualname__ == f"{q}.{k}":
+            _flat_class(D, m, v, out, seen)
+        elif k == "__annotations__" and type(v) is dict:
+            _flat_annotations(D, f"{m}:{q}", v, out)
+        else:
+            out[f"{m}:{q}.{k}"] = D.of(v)
+
+
+def _flat_annotations(D, prefix, ann, out):
+    """One entry per annotated name, so that (re)binding NAME: T = ... only
+    changes an entry bound to NAME."""
+    for k, v in ann.items():
+        out[f"{prefix}.__annotations__#.{k}"] = D.of(v)
+
+
+def flat_state(root) -> dict:
+    """Import every sqlglot module in a fixed order and digest what the
+    imports produced: one entry per module global and per class attribute
+    ("module:Qual.name").  A module whose import raises maps "module:!"."""
     import importlib
     import sys
+    import unittest  # noqa: F401  sqlglot.expressions.core records whether it is loaded;
+    #                  the tests always run with it, the pinned build must too
 
+    names = module_names(root)
     out = {}
     for m in names:
         try:
             importlib.import_module(m)
         except BaseException as e:  # noqa: BLE001
-            out[m] = f"raised:{type(e).__name__}"
+            out[m + ":!"] = f"raised:{type(e).__name__}"
+    D = _StateDigest()
     for m in names:
-        if m in out:
-            continue
         mod = sys.modules.get(m)
         if mod is None:
-            out[m] = "missing"
+            out.setdefault(m + ":!", "missing")
             continue
-        g = {k: v for k, v in vars(mod).items() if k not in ("__builtins__", "__cached__", "__file__",
-                                                                "__loader__", "__spec__", "__doc__", "__path__")}
-        out[m] = _StateDigest(m).of(g)
+        seen = set()
+        for k, v in vars(mod).items():
+            if k in _MOD_SKIP:
+                continue
+            if isinstance(v, type) and v.__module__ == m and v.__qualname__ == k:
+                _flat_class(D, m, v, out, seen)
+            elif k == "__annotations__" and type(v) is dict:
+                _flat_annotations(D, f"{m}:", v, out)
+            else:
+                out[f"{m}:{k}"] = D.of(v)
     return out
+
+
+def state_name(key: str) -> str:
+    """The binding name an entry of flat_state is stored under."""
+    return key.rsplit(":", 1)[1].rsplit(".", 1)[-1]
+
+
+def state_check(expected: dict, allowed) -> tuple:
+    """(True, "") when the patched imports changed only entries bound to a
+    name in `allowed`; else (False, the first other entry that differs)."""
+    import os
+
+    got = flat_state(os.getcwd())
+    dump = os.environ.get("RWX_STATE_DUMP")  # validation only
+    if dump:
+        import json
+
+        with open(f"{dump}.{os.getpid()}.json", "w") as fh:
+            json.dump(got, fh)
+    for k in sorted(set(expected) | set(got)):
+        if expected.get(k) != got.get(k) and (k.endswith(":!") or state_name(k) not in allowed):
+            return False, k
+    return True, ""
+
+
+def fixture_loads(text) -> bool:
+    """Whether tests.helpers.load_sql_fixture_pairs would read this fixture
+    text without raising (it opens with universal newlines)."""
+    try:
+        from tests.helpers import _extract_meta, _filter_comments
+
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        statements = _filter_comments(text).split(";")
+        for i in range(0, len(statements), 2):
+            if i + 1 < len(statements):
+                _extract_meta(statements[i].strip())
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 class _Captured(Exception):
@@ -354,5 +468,8 @@ if __name__ == "__main__":  # build step: pinned digests
     root, out = sys.argv[1], sys.argv[2]
     os.chdir(root)
     sys.path.insert(0, root)
+    if len(sys.argv) > 3:  # pinned per-attribute import state
+        with open(sys.argv[3], "w") as fh:
+            json.dump(flat_state(root), fh, separators=(",", ":"))
     with open(out, "w") as fh:
         json.dump(compute_all(), fh)

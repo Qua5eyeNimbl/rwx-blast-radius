@@ -277,3 +277,26 @@ Plan: in the child, import all sqlglot modules in sorted order with the patch: r
 core ∪ collectors ∪ requirers only; state digest equal → drop the import-time part; else keep.
 `replay.import_states` exists but is NOT deterministic yet (dialect/typing modules differ run to
 run even with seed 0 — find the id/order-dependent attribute) and is not wired in.
+
+## v6 (Sat Nov 21 ~5 AM CT) — TPC replay for constant/binding changes and setup-only fixtures (NOT submitted)
+
+Floor analysis (cost of the labelled failing set, optimally scheduled): sample 94.35 s vs v5 103.17 s,
+so the sample is nearly exhausted (the rest is 4d63/5y72, where running the tests costs more CPU than
+it saves). Holdout/targeted were 345 s / 274 s above floor; `test_execute_tpcds` (21.5 s) kept while
+passing was the largest share (102 s / 62 s). v6 extends T2:
+- class/module-level bindings and signature changes outside `sqlglot/executor/`: every reference of
+  the bound names (selector `_trace_uses`, through pass-throughs) plays the role of the changed lines
+  (must not run at import, must not be in the test's shared phase 2; queries whose phase 2 reaches them
+  are re-executed); names ending `_sql` and dunders refused; references in the TPC tests' own files refuse.
+- `replay.state_check`: in the child, import every sqlglot module (patched) and compare a per-attribute
+  digest map (`flat_state`, 17k entries, pinned at build into /app/state_expected.json) with the
+  pinned one; only entries bound to the changed names may differ (catches derived state, import
+  raises). Order-insensitive for class-keyed dicts and class tuples (built from sets: per-process
+  order); loggers by name/level; unittest imported first (`expressions.core.UNITTEST`).
+- `tpc-h.sql` change → tpcds eligible, `tpc-ds.sql` → the TPC-H tests: setUpClass only loads it;
+  the child checks the patched text loads (`replay.fixture_loads`). No T1 tests for data-file patches.
+- Parity (verify-all): targeted 58, holdout 62 commits, 0 violations.
+- Production (organizer flags, local): sample 103.165 s, CPU 2.55, 0 misses (unchanged);
+  holdout 636.8 s (v5 669.4), CPU 28.5 (22.1), 0 misses; targeted 455.1 s (470.3), CPU 15.1 (9.4),
+  0 misses. Net at board CPU rate ≈ −17 s holdout, −2.5 s targeted.
+- Import-time "state equal ⇒ drop importers" lever measured: ~1 s on holdout, not pursued.

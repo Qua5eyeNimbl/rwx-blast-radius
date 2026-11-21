@@ -17,9 +17,10 @@ COPY selector.py runner.py replay.py /app/
 # Precompile so the read-only runtime never tries to write bytecode
 RUN python -m compileall -q /app/selector.py /app/runner.py /app/replay.py
 # A fixed hash seed makes replayed optimizer plans reproducible (one TPC-DS
-# plan depends on set iteration order); the pinned replay digests are made
-# here, from the pinned tree, under the same seed.
+# plan depends on set iteration order); the pinned replay digests and the
+# pinned per-attribute import state are made here, from the pinned tree,
+# under the same seed.
 ENV PYTHONHASHSEED=0
-RUN SKIP_INTEGRATION=0 python /app/replay.py /app/sq /app/replay_expected.json
+RUN SKIP_INTEGRATION=0 python /app/replay.py /app/sq /app/replay_expected.json /app/state_expected.json
 ENV PYTHONDONTWRITEBYTECODE=1
 CMD ["python", "/app/selector.py"]
