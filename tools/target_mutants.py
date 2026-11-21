@@ -7,6 +7,7 @@ Candidates (all inside class bodies of sqlglot/*.py):
   insattr  - a bool flag of a base class (Dialect/Tokenizer/Parser/Generator)
              overridden with the opposite value in a subclass that does not set it
   docstr   - a word inserted into a module/class/function docstring
+  defarg   - a bool default of a function parameter flipped
 
 Only candidates where the new selector and a reference selector disagree are
 kept (the others say nothing about the new rules); a seeded sample is written.
@@ -93,12 +94,20 @@ def main():
                     if nm and isinstance(st.value, ast.Constant) and isinstance(st.value.value, bool):
                         base_flags.setdefault(role, {})[nm] = st.value.value
 
-    cands = {"dictval": [], "delattr": [], "insattr": [], "docstr": []}
+    cands = {"dictval": [], "delattr": [], "insattr": [], "docstr": [], "defarg": []}
     for rel, text in sorted(src.items()):
         if not rel.startswith("sqlglot/") or not rel.endswith(".py"):
             continue
         lines = text.split("\n")
         tree = ast.parse(text)
+        for fn in ast.walk(tree):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dv in fn.args.defaults + [x for x in fn.args.kw_defaults if x is not None]:
+                    if isinstance(dv, ast.Constant) and isinstance(dv.value, bool) and dv.lineno == dv.end_lineno:
+                        ln = lines[dv.lineno - 1]
+                        new = lines[:]
+                        new[dv.lineno - 1] = flip_const(dv, ln)
+                        cands["defarg"].append((rel, "\n".join(new), f"{fn.name}@{dv.lineno}"))
         for d in [tree] + [x for x in ast.walk(tree) if isinstance(x, (ast.ClassDef, ast.FunctionDef))]:
             st = d.body[0] if d.body else None
             if (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str)

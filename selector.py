@@ -510,6 +510,71 @@ def _literal_class_attr(st, inserted=False) -> bool:
     return not any(isinstance(n, ast.Name) and n.id == name for n in nodes)
 
 
+def _changed_default_params(a, b):
+    """Names of parameters whose default changed between FunctionDefs `a`
+    and `b`, or None when anything else in the signature differs."""
+    if a.name != b.name or [_dump(d) for d in a.decorator_list] != [_dump(d) for d in b.decorator_list]:
+        return None
+    if (_dump(a.returns) if a.returns else "") != (_dump(b.returns) if b.returns else ""):
+        return None
+    aa, ba = a.args, b.args
+    for f in ("posonlyargs", "args", "kwonlyargs"):
+        if [_dump(x) for x in getattr(aa, f)] != [_dump(x) for x in getattr(ba, f)]:
+            return None
+    if (_dump(aa.vararg) if aa.vararg else "") != (_dump(ba.vararg) if ba.vararg else ""):
+        return None
+    if (_dump(aa.kwarg) if aa.kwarg else "") != (_dump(ba.kwarg) if ba.kwarg else ""):
+        return None
+    if len(aa.defaults) != len(ba.defaults) or len(aa.kw_defaults) != len(ba.kw_defaults):
+        return None
+    pos = [x.arg for x in aa.posonlyargs + aa.args]
+    changed = set()
+    for i, (da, db) in enumerate(zip(aa.defaults, ba.defaults)):
+        if _dump(da) != _dump(db):
+            changed.add(pos[len(pos) - len(aa.defaults) + i])
+    for x, da, db in zip(aa.kwonlyargs, aa.kw_defaults, ba.kw_defaults):
+        if (_dump(da) if da else "") != (_dump(db) if db else ""):
+            changed.add(x.arg)
+    return changed or None
+
+
+_ATTR_FUNCS = {"getattr", "hasattr", "setattr", "delattr", "attrgetter", "methodcaller", "signature",
+               "getfullargspec", "__getattribute__", "__getattr__"}
+
+
+def _attr_lookup_string(n) -> bool:
+    """A string constant that may name an attribute: an argument of a
+    getattr-style call, or anything not plainly a dict key / call argument."""
+    p = getattr(n, "_rwx_parent", None)
+    if isinstance(p, ast.Call):
+        f = p.func
+        fname = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+        return fname is None or fname in _ATTR_FUNCS
+    if isinstance(p, ast.Dict):
+        return False
+    if isinstance(p, ast.Compare):
+        return False
+    if isinstance(p, (ast.Tuple, ast.List, ast.Set)):
+        q = getattr(p, "_rwx_parent", None)
+        return not isinstance(q, (ast.Dict, ast.Compare, ast.Assign))
+    return True
+
+
+def _call_supplies(call, changed, params) -> bool:
+    """True when `call` passes every parameter in `changed` explicitly."""
+    if any(isinstance(x, ast.Starred) for x in call.args) or any(k.arg is None for k in call.keywords):
+        return False
+    kws = {k.arg for k in call.keywords}
+    npos = len(call.args)
+    for p in changed:
+        if p in kws:
+            continue
+        if p in params and npos >= params.index(p) + 1:
+            continue  # supplied positionally even if the call is unbound
+        return False
+    return True
+
+
 def _truth_only(n) -> bool:
     """`n` is evaluated only for its truth value."""
     p = getattr(n, "_rwx_parent", None)
@@ -628,7 +693,9 @@ def diff_stmt(kind, unit, a, b, out, ctx: _Ctx):
         same_decorators = [_dump(d) for d in a.decorator_list] == [_dump(d) for d in b.decorator_list]
         if same_decorators and a.name == b.name:
             # defaults/annotations changed: only callers can observe it
-            out.append(Change("defaults", unit + ("." if unit else "") + a.name, [_span(a)], "signature"))
+            dch = Change("defaults", unit + ("." if unit else "") + a.name, [_span(a)], "signature", node=a)
+            dch.new_node = b
+            out.append(dch)
             if kind == "function":
                 out.append(Change(kind, unit, [(_start(a), a.body[0].lineno - 1 if a.body else a.lineno)], "nested-def"))
             return
@@ -964,6 +1031,10 @@ class Selector:
                 for m in imods:
                     if m != mod:
                         out |= ix.module_users(m, deep=True)
+            # ... and of those, only calls that leave a changed parameter out
+            narrowed = self._narrow_defaults(ch)
+            if narrowed is not None:
+                out &= narrowed
             return out
         if ch.kind == "class" and ch.detail in ("stmt-removed/replaced", "stmt-inserted"):
             # a literal class attribute removed (base value shows through) or
@@ -1014,6 +1085,54 @@ class Selector:
                 out |= ix.module_users(mod, deep=True)
         else:
             out |= ix.module_users(mod, deep=True)
+        return out
+
+    def _narrow_defaults(self, ch: Change):
+        """Only a call that leaves a parameter out sees that parameter's new
+        default.  Every reference to the function's name must be a direct
+        call (a callback, getattr string or inspect use disables this); the
+        answer is the tests executing calls that may omit a changed
+        parameter.  Positional arguments count as supplying a parameter only
+        when they do so whether or not the call is bound."""
+        a, b = ch.node, ch.new_node
+        if a is None or b is None:
+            return None
+        if a.name.startswith("__") and a.name.endswith("__"):
+            return None  # called implicitly (ClassName(...), operators, protocols)
+        for d in a.decorator_list:
+            if not (isinstance(d, ast.Name) and d.id in ("staticmethod", "classmethod")):
+                return None  # a wrapper or registry may call it on its own terms
+        changed = _changed_default_params(a, b)
+        if not changed:
+            return None
+        params = [x.arg for x in a.args.posonlyargs + a.args.args]
+        name = a.name
+        ix = self.index
+        out = set()
+        for frel, text in ix.sources().items():
+            if name not in text:
+                continue
+            for n in self._named_nodes(frel).get(name, ()):
+                if isinstance(n, ast.arg) or (isinstance(n, ast.keyword) and n.arg == name):
+                    continue
+                if isinstance(n, ast.Constant):
+                    if n.value == name and _attr_lookup_string(n):
+                        return None
+                    continue
+                if not ((isinstance(n, ast.Name) and n.id == name) or (isinstance(n, ast.Attribute) and n.attr == name)):
+                    continue
+                par = getattr(n, "_rwx_parent", None)
+                if isinstance(par, ast.FunctionDef) or isinstance(par, ast.AsyncFunctionDef):
+                    continue
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                    return None
+                if not (isinstance(par, ast.Call) and par.func is n):
+                    return None
+                if not _call_supplies(par, changed, params):
+                    ts, imods = ix.line_tests(frel, par.lineno, getattr(par, "end_lineno", par.lineno))
+                    out |= ts
+                    for m in imods:
+                        out |= ix.module_users(m, deep=True) | ix.requirers(m)
         return out
 
     def _expr_class_users(self, name: str):
