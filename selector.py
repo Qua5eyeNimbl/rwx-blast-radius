@@ -472,6 +472,76 @@ def _literal_only_change(ch) -> bool:
     return True
 
 
+def _dict_keys_stable(a, b) -> bool:
+    """True when assignments `a` and `b` both bind a dict literal with the
+    same keys in the same order (no ** spread changed): only values differ."""
+    va, vb = getattr(a, "value", None), getattr(b, "value", None)
+    if not (isinstance(va, ast.Dict) and isinstance(vb, ast.Dict)) or len(va.keys) != len(vb.keys):
+        return False
+    for ka, kb, xa, xb in zip(va.keys, vb.keys, va.values, vb.values):
+        if ka is None or kb is None:
+            if ka is not kb or _dump(xa) != _dump(xb):
+                return False
+        elif _dump(ka) != _dump(kb):
+            return False
+    return True
+
+
+def _literal_class_attr(st, inserted=False) -> bool:
+    """`NAME = <value>` / `NAME: T = <value>` whose value has no calls: a
+    removed one only stops binding NAME; an inserted one must not be able to
+    raise, so it may hold constants (and containers of them) only."""
+    if isinstance(st, ast.Assign):
+        if len(st.targets) != 1 or not isinstance(st.targets[0], ast.Name):
+            return False
+        name, value = st.targets[0].id, st.value
+    elif isinstance(st, ast.AnnAssign):
+        if not isinstance(st.target, ast.Name) or st.value is None:
+            return False
+        name, value = st.target.id, st.value
+    else:
+        return False
+    ok = (ast.Constant, ast.Tuple, ast.List, ast.Set, ast.Dict, ast.Load, ast.UnaryOp, ast.USub, ast.Not)
+    if not inserted:
+        ok += (ast.Name, ast.Attribute, ast.BinOp, ast.operator, ast.unaryop)
+    nodes = list(ast.walk(value))
+    if not all(isinstance(n, ok) for n in nodes):
+        return False
+    return not any(isinstance(n, ast.Name) and n.id == name for n in nodes)
+
+
+def _truth_only(n) -> bool:
+    """`n` is evaluated only for its truth value."""
+    p = getattr(n, "_rwx_parent", None)
+    if isinstance(p, (ast.If, ast.While, ast.IfExp, ast.Assert)) and p.test is n:
+        return True
+    if isinstance(p, ast.UnaryOp) and isinstance(p.op, ast.Not):
+        return True
+    if isinstance(p, ast.comprehension) and any(c is n for c in p.ifs):
+        return True
+    if (isinstance(p, ast.Call) and isinstance(p.func, ast.Name) and p.func.id == "bool"
+            and len(p.args) == 1 and p.args[0] is n and not p.keywords):
+        return True
+    if isinstance(p, ast.BoolOp):
+        return _truth_only(p)
+    return False
+
+
+def _key_only_use(n) -> bool:
+    """A reference to a dict whose use depends only on its keys: `k in D`,
+    `k not in D`, `len(D)`, or a truth test."""
+    p = getattr(n, "_rwx_parent", None)
+    if isinstance(p, ast.Compare):
+        for op, c in zip(p.ops, p.comparators):
+            if c is n:
+                return isinstance(op, (ast.In, ast.NotIn))
+        return False
+    if (isinstance(p, ast.Call) and isinstance(p.func, ast.Name) and p.func.id == "len"
+            and len(p.args) == 1 and p.args[0] is n and not p.keywords):
+        return True
+    return _truth_only(n)
+
+
 def _span(st):
     return (_start(st), getattr(st, "end_lineno", st.lineno))
 
@@ -498,6 +568,22 @@ class _Ctx:
         return [self.key(st, side) for st in body]
 
 
+def _refined(opcodes, a_body, b_body):
+    """Statements next to a changed line are keyed by AST on the side whose
+    line changed and by text on the other, so an insertion or deletion can
+    show up as an unequal-length replace that swallows its neighbours.
+    Re-match those ranges with the AST key on both sides."""
+    for op, i1, i2, j1, j2 in opcodes:
+        if op == "equal" or (op == "replace" and i2 - i1 == j2 - j1) or i1 == i2 or j1 == j2:
+            yield op, i1, i2, j1, j2
+            continue
+        sa = [_shallow(x) for x in a_body[i1:i2]]
+        sb = [_shallow(x) for x in b_body[j1:j2]]
+        sub = difflib.SequenceMatcher(None, sa, sb, autojunk=False)
+        for op2, k1, k2, l1, l2 in sub.get_opcodes():
+            yield op2, i1 + k1, i1 + k2, j1 + l1, j1 + l2
+
+
 def diff_body(kind, unit, a_body, b_body, parent_hdr, out: list, ctx: _Ctx):
     """Compare two statement lists (one unit).  Function/class definitions
     are compared by header only (their bodies are separate units)."""
@@ -506,7 +592,7 @@ def diff_body(kind, unit, a_body, b_body, parent_hdr, out: list, ctx: _Ctx):
     if a_keys == b_keys:
         return
     sm = difflib.SequenceMatcher(None, a_keys, b_keys, autojunk=False)
-    for op, i1, i2, j1, j2 in sm.get_opcodes():
+    for op, i1, i2, j1, j2 in _refined(sm.get_opcodes(), a_body, b_body):
         if op == "equal":
             continue
         if op == "replace" and (i2 - i1) == (j2 - j1):
@@ -527,7 +613,10 @@ def diff_body(kind, unit, a_body, b_body, parent_hdr, out: list, ctx: _Ctx):
                 nb.append(_span(a_body[i1]))
             if not nb and parent_hdr:
                 nb.append(parent_hdr)
-            out.append(Change(kind, unit, nb, "stmt-inserted"))
+            ins = Change(kind, unit, nb, "stmt-inserted")
+            if kind == "class" and j2 - j1 == 1:
+                ins.new_node = b_body[j1]
+            out.append(ins)
 
 
 def diff_stmt(kind, unit, a, b, out, ctx: _Ctx):
@@ -847,6 +936,16 @@ class Selector:
                     if m != mod:
                         out |= ix.module_users(m, deep=True)
             return out
+        if ch.kind == "class" and ch.detail in ("stmt-removed/replaced", "stmt-inserted"):
+            # a literal class attribute removed (base value shows through) or
+            # added (overrides the base): only reads of that name through
+            # this class can tell
+            st = ch.node if ch.detail == "stmt-removed/replaced" else ch.new_node
+            if _literal_class_attr(st, inserted=ch.detail == "stmt-inserted"):
+                probe = Change(ch.kind, ch.unit, ch.lines, "removed" if ch.detail == "stmt-removed/replaced" else "stmt", node=st)
+                narrowed = self._narrow_by_name(rel, mod, probe)
+                if narrowed is not None:
+                    return narrowed
         structural = not _literal_only_change(ch)
         if structural:
             # anything but a literal/operator tweak can make the import raise
@@ -1007,7 +1106,9 @@ class Selector:
         for sub in ast.walk(value):
             if isinstance(sub, (ast.Lambda, ast.Call, ast.NamedExpr)):
                 return None
-        uses = self._trace_uses(names)
+        # a removed binding can make any reference raise, pass-throughs included
+        uses = self._trace_uses(names, keys_stable=_dict_keys_stable(node, ch.new_node),
+                                every_ref=ch.detail == "removed")
         if uses is None:
             return None
         ix = self.index
@@ -1059,7 +1160,7 @@ class Selector:
                 d.setdefault(k, []).append(n)
         return d
 
-    def _trace_uses(self, start_names):
+    def _trace_uses(self, start_names, keys_stable=False, every_ref=False):
         ix = self.index
         src = ix.sources()
         names = set(start_names)
@@ -1116,15 +1217,16 @@ class Selector:
                             todo.append(tname)
                         uses.add((frel, n.lineno, "pass"))
                         continue
-                    stmt = n
-                    while stmt is not None and not isinstance(stmt, ast.stmt):
-                        stmt = getattr(stmt, "_rwx_parent", None)
+                    if keys_stable and _key_only_use(n):
+                        continue  # membership/truthiness/len: same keys, same answer
                     uses.add((frel, n.lineno, "use"))
         # a keyword hand-off must land in a real parameter we can see
         if any(k not in defined_params for k in handed):
             return None
         # pass-throughs only move the value; every place it is consumed is a
         # "use" line, and uses executed at import time disable the narrowing
+        if every_ref:
+            return {(frel, lno) for frel, lno, kind in uses}
         return {(frel, lno) for frel, lno, kind in uses if kind == "use"}
 
     @staticmethod
