@@ -1,14 +1,40 @@
-# Handoff — RWX Blast Radius (Sat Nov 21, 2026, ~12:15 AM CT)
+# Handoff — RWX Blast Radius (Sat Nov 21, 2026, ~12:35 AM CT)
 
 Start here in a new chat. Also read `CLAUDE.md` (project rules) and `README.md` (how the selector works).
 
 - **Deadline: Sun Nov 22, 10:00 AM CT.** Submissions close then; the final is scored after.
 - Track page (sign in there to submit): https://www.joinbuilders.org/buildathon/tracks/blast-radius
 - Repo: https://github.com/Qua5eyeNimbl/rwx-blast-radius (public). Local: `C:\rwx-blast-radius`.
+- Pushing: only the user's own PowerShell has GitHub credentials (`git push origin <branch>`);
+  the cloud workspace and the device VM shell cannot push. Do not submit without the user's OK.
 
-## v4 (branch `v4-narrowing`) — ready, NOT submitted
+## Board status (Sat 1:31 AM CT)
 
-Built on v3 in a later session. **Not submitted; the user decides.** All checks pass:
+| Receipt | Commit | Score | Simulated | CPU (3 runs) | Misses |
+|---|---|---|---|---|---|
+| **BB-2670E479** | `1c3bf4c` (v4, `v4-narrowing`) | **178.7 s — entered (best)** | 177.784 s | 0.92 / 0.89 / 1.07 | 0 |
+| BB-7BA6EB0B | `3999bb3` (v3) | 180.3 s | 177.784 s | 2.48 / 2.49 / 2.52 | 0 |
+
+Leaderboard (168 teams, Sat ~12:30 AM): 1st **146.3 s**, 2nd 149.7, 3rd 151.8, 5th 160.2, 10th 168.1.
+We are ~18th–19th. The user wants 1st (asked for "aim for 70"; that is below any perfect-selection
+floor: sample best possible is 94.351 s for 30 commits; the board has 40).
+
+**Key lesson from v4's board run:** simulated time was *identical* to v3 (177.784 s). None of the
+board's 40 commits hit any v4 rule; all of v4's gain was CPU (2.5 → 0.9 s). So:
+- the board does not contain the sample commits (sample `4d63` alone would have saved ~6 s);
+- the calibration "board ≈ sample × 40/30 × 1.12" predicted 168.5 s and was **wrong** — don't use it;
+- the gap to 1st is ~31 s of *simulated* time. Our sample gap to perfect is only 18 s over 30
+  commits, so the board likely has a few commits where we pay ~25 s for `test_execute_tpcds`
+  (21.5 s) without it failing. Prime suspect, unverified.
+
+The user asked to "cheat if needed"; that was declined (rules ban patch/edit-kind→failing-test
+tables, entries are read, sample answers can't go in the image). Legitimate risk bets
+(selecting nothing / dropping a test when failure looks unlikely) are allowed but are the
+user's decision: the final is ~60 unseen commits, top 5 re-run 5×, one miss = +300 s.
+
+## v4 (branch `v4-narrowing`) — submitted, 178.7 s (see Board status)
+
+Built on v3. Local checks:
 
 | Check | v3 (`3999bb3`, board 180.3 s) | v4 (`v4-narrowing` head) |
 |---|---|---|
@@ -19,8 +45,8 @@ Built on v3 in a later session. **Not submitted; the user decides.** All checks 
 | Unit tests | 21 pass | 28 pass |
 
 Docker output is byte-identical to a local run on sample, holdout and targeted sets.
-Projected practice-board score with the calibration below (`sample_sim × 40/30 × 1.12 + CPU × 1.35`):
-112.359 × 1.493 + 0.55 × 1.35 ≈ **168.5 s** (v3: 180.3 s). One data point; re-fit after a submission. v4 also closes two v3 misses (import-time breakage, see 5–6 below).
+The board result (178.7 s) shows these selection gains did not apply to the board's commits;
+only the CPU gain did. They still matter for the final's unseen commits (and v4 fixes two v3 misses). v4 also closes two v3 misses (import-time breakage, see 5–6 below).
 
 ### What v4 changed (all general rules, evidence in `benchmarks/targeted/`)
 
@@ -50,7 +76,7 @@ Projected practice-board score with the calibration below (`sample_sim × 40/30 
 
 **If you change selector.py tracing code, run `python tools/build_trace_cache.py`.**
 
-## Where things stood after v3 (still the submitted score)
+## Where things stood after v3 (history; v4 is now the entered score)
 
 **Submitted and scored: 180.3 s, 0 missed commits.** Receipt `BB-7BA6EB0B`, commit
 `3999bb36c86f363f7db123a335ab390e901b060b` (`v3-import-instances`), submitted Fri ~10:24 PM CT.
@@ -67,7 +93,7 @@ Board context when we submitted (130 teams): leaders were about 152–157 s; 180
 | `main` (default) | `a93f952` | v0.1. **An empty Commit box on the submit form scores this.** |
 | `v2-coverage-selector` | `81b75b9` | v2 coverage selector; known-good fallback |
 | `v3-import-instances` | `3999bb3` | **v3, the scored submission** (this file's later edits sit on top) |
-| `v4-narrowing` | see `git log` | **v4 candidate, not submitted, not pushed yet** (branched from v3 + handoff) |
+| `v4-narrowing` | `1c3bf4c`+ | **v4, scored 178.7 s, entered** (later commits on it are handoff edits only) |
 
 ### Numbers (local)
 
@@ -83,6 +109,9 @@ Board context when we submitted (130 teams): leaders were about 152–157 s; 180
 v0.1 scored 494.3 s on the sample.
 
 ## Local number vs board number (why 119 s became 180 s)
+
+**Superseded:** the prediction formula below failed for v4 (predicted 168.5 s, got 178.7 s; the
+board's commits are not the sample's). Keep only the 40-vs-30 commit count.
 
 The practice board scores **40 commits; the sample has 30.** Proof: the starter (run every test, 3 workers)
 costs the same on every commit, 40.349 s (LPT over 3 workers; sample total 1,210.470 s = 30 × 40.349).
@@ -156,16 +185,25 @@ falls back to a broad selection. Details in `README.md`.
 
 ## Next steps
 
-1. **Decide whether to submit v4** (`v4-narrowing` head SHA). It beats v3 on every local check.
-   One submission per hour; compare the board's misses/CPU after. If it shows misses, pick v3 back.
-2. Remaining over-cost is mostly inherent to line coverage: a broadly executed line pulls in
-   `test_execute_tpcds` (21.5 s). Ideas tried and dropped this session: narrowing `setUpClass`
-   fixture data (TestExecutor's tpch/tpcds paths share `subtestHelper`, so static analysis
-   keeps tpcds anyway). The four "1,020 dialect tests fail" holdout cases look cheap in the
-   oracle only because pytest stops after a collection error; do not chase them.
-3. CPU left (~0.5 s on the sample) is mostly `ast.parse` of the patched files and JSON load.
-4. **Freeze well before Sun 10:00 AM CT.** Never swap a graded, working commit for an untested change
-   near the cutoff.
+1. **Find what the board's commits cost us.** We can't see them; reason from the sample (same
+   organizer generator) and our own mutants. Prime target: commits that change broadly executed
+   parser/generator/optimizer lines pull in `test_execute_tpcds` (21.5 s; ~25 s per commit).
+   On the sample it was selected 3× and really failed 2× (`3utz`, `2jrq`), so never-select is not
+   safe. Look for *provable* cases where a change can't reach it (paths its queries never take),
+   validate on labelled mutants (`tools/ground_truth.py`), then offer the user a submission.
+2. **Optional diagnostic submission (user's call):** a variant that never selects
+   `test_execute_tpcds`. The board's change in simulated seconds and misses shows how many board
+   commits pay for it and how often it really fails there. Legal (board feedback only), but it
+   will show misses on the board; the best score stays entered. Practice commits ≠ final commits.
+3. **Risk bets (user's call only):** e.g. select nothing for commits whose only selected tests
+   execute a boundary-only change. Need ~1% failure odds to pay off at 2–6 s per commit; our 173
+   labelled patches can't measure odds that small. If built, keep on its own branch, report
+   savings and would-be misses on all labelled sets, and let the user choose.
+4. **CPU:** board 0.9 s vs ~0.55 s local; remaining cost is `ast.parse` of patched files and JSON
+   loading of `index.json.gz` (~0.08 s; a faster format is possible).
+5. **Final entry:** the best score is entered automatically. Before the cutoff confirm the entered
+   commit is the one wanted; never leave a commit with board misses as the chosen one.
+   **Freeze well before Sun 10:00 AM CT.**
 
 ## Environment notes (for whoever continues)
 
