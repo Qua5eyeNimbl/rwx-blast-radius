@@ -1,4 +1,4 @@
-# Handoff — RWX Blast Radius (Fri Nov 20, 2026, ~10:30 PM CT)
+# Handoff — RWX Blast Radius (Sat Nov 21, 2026, ~12:15 AM CT)
 
 Start here in a new chat. Also read `CLAUDE.md` (project rules) and `README.md` (how the selector works).
 
@@ -6,7 +6,51 @@ Start here in a new chat. Also read `CLAUDE.md` (project rules) and `README.md` 
 - Track page (sign in there to submit): https://www.joinbuilders.org/buildathon/tracks/blast-radius
 - Repo: https://github.com/Qua5eyeNimbl/rwx-blast-radius (public). Local: `C:\rwx-blast-radius`.
 
-## Where things stand
+## v4 (branch `v4-narrowing`) — ready, NOT submitted
+
+Built on v3 in a later session. **Not submitted; the user decides.** All checks pass:
+
+| Check | v3 (`3999bb3`, board 180.3 s) | v4 (`v4-narrowing` head) |
+|---|---|---|
+| Public sample, Docker + organizer `RUN_FLAGS` | 118.978 s, 0 misses | **112.359 s, 0 misses** |
+| Container CPU on the sample (3 runs, same machine) | 1.5–2.1 s | **0.53–0.66 s** |
+| Holdout, 96 graded | 744.9 s, 0 misses | **720.4 s, 0 misses** |
+| Targeted holdout, 77 graded (`benchmarks/targeted/`) | 2,062 s, **2 misses** | **496 s, 0 misses** |
+| Unit tests | 21 pass | 28 pass |
+
+Docker output is byte-identical to a local run on sample, holdout and targeted sets.
+Projected practice-board score with the calibration below (`sample_sim × 40/30 × 1.12 + CPU × 1.35`):
+112.359 × 1.493 + 0.55 × 1.35 ≈ **168.5 s** (v3: 180.3 s). One data point; re-fit after a submission. v4 also closes two v3 misses (import-time breakage, see 5–6 below).
+
+### What v4 changed (all general rules, evidence in `benchmarks/targeted/`)
+
+1. **Dict value edits ignore key-only uses.** When only values of a dict literal change,
+   `k in D`, `len(D)`, truth tests are not uses. Sample `4d63` (358 → 11 tests).
+2. **Literal class attribute removed/added** → traced like a value change (removed: every
+   reference counts, pass-throughs too, since any read can raise). Holdout `h11_026` 1,153 → 16.
+3. **Insert/delete next to a touched line** no longer swallows the neighbour: unequal
+   replace ranges are re-matched by AST (`_refined`).
+4. **Docstring edits** (non-empty → non-empty) select nothing: `__doc__` is only tested for
+   emptiness in sqlglot and doctests are not in the collected suite (`load_tests` isn't run by pytest).
+5. **Constants read through the class name** (`TimeUnit.VAR_LIKE`) are no longer intersected
+   with users of the class (that intersection was wrong in v3 too; found by a labelled miss).
+6. **Import-time breakage fails whole test files at collection.** The index never recorded
+   collection-time imports of sqlglot modules; v4 adds a static import graph of the pinned
+   source and selects every test of each file whose collection imports the broken module
+   (`Index.collectors`, used by `requirers`). Fixes v3 misses `t24_defarg_001`, `t25_tmpl_000`.
+7. **SQL text parsed at import** (`maybe_parse("...")`, `parse_one`, `DataType.build`, ...):
+   a literal change there can break the import → requirers.
+8. **Default-argument changes** → only tests that ran the function *and* a call that omits the
+   parameter (all references must be direct calls; dunder/decorated functions excluded).
+9. **CPU**: use traces, call sites and the collection import graph are precomputed into
+   `index/trace_cache.json.gz` (`tools/build_trace_cache.py`, ~30 s). It stores a hash of the
+   tracing code; on mismatch the selector traces live (same answers, slower). Unit test
+   `test_trace_cache_is_fresh` fails if you edit tracing code without rebuilding.
+   Also: one-pass AST indexing, cheaper scheduler search, no full dumps of class ASTs. Output identical.
+
+**If you change selector.py tracing code, run `python tools/build_trace_cache.py`.**
+
+## Where things stood after v3 (still the submitted score)
 
 **Submitted and scored: 180.3 s, 0 missed commits.** Receipt `BB-7BA6EB0B`, commit
 `3999bb36c86f363f7db123a335ab390e901b060b` (`v3-import-instances`), submitted Fri ~10:24 PM CT.
@@ -16,13 +60,14 @@ the final as the team's best score.
 Board context when we submitted (130 teams): leaders were about 152–157 s; 180.3 s placed about
 13th. The gap to the top (~25 s) matches our gap to the best possible score on the sample.
 
-### Branches (all pushed to GitHub)
+### Branches
 
 | Branch | Head | What it is |
 |---|---|---|
 | `main` (default) | `a93f952` | v0.1. **An empty Commit box on the submit form scores this.** |
 | `v2-coverage-selector` | `81b75b9` | v2 coverage selector; known-good fallback |
 | `v3-import-instances` | `3999bb3` | **v3, the scored submission** (this file's later edits sit on top) |
+| `v4-narrowing` | see `git log` | **v4 candidate, not submitted, not pushed yet** (branched from v3 + handoff) |
 
 ### Numbers (local)
 
@@ -111,29 +156,21 @@ falls back to a broad selection. Details in `README.md`.
 
 ## Next steps
 
-1. **Cost cuts, only with evidence.** Any change must keep: sample 0 misses, all 96 holdout labels
-   0 misses, unit tests passing, Docker run valid. Compare totals with `tools/eval_holdout.py`.
-   Where v3 pays beyond the best possible on the sample (24.6 s total):
-   - `4d63`: 12.69 s, 358 tests selected, none fail — the single biggest target.
-   - `2qn5`, `5y72`, `gbav`, `fryt`, `ktz3`: ~2.1–2.5 s each, nothing fails (any non-empty
-     selection costs at least 2 s).
-   - Smaller: `535z` +0.25, `bj7g` +0.23.
-   Do not tune rules to these sample commits specifically (that is fitting to answers). Find the
-   general rule that over-selects, then confirm on the holdout. Ideas from before: narrow string-keyed
-   dict entries (`FUNCTIONS`, `SHOW_PARSERS`) by the expression classes they build; data-flow
-   narrowing for class-scoped `setUpClass` fixture data.
-   `test_execute_tpcds` (21.5 s) drives most holdout over-cost but really fails in ~3 of 11
-   selections: keep it (dropping it is a losing bet against a 300 s miss).
-2. **Remaining CPU** (~1.8 s here, ~2.5 s on the board) is mostly `ast.parse` and parent links in `_tree`.
-3. **Only resubmit a commit that beats v3 locally and has 0 holdout misses.** Then compare the board's
-   misses/CPU. If a new submission shows misses, the final still uses the best score unless you pick
-   another, but don't leave a worse commit as the chosen one.
+1. **Decide whether to submit v4** (`v4-narrowing` head SHA). It beats v3 on every local check.
+   One submission per hour; compare the board's misses/CPU after. If it shows misses, pick v3 back.
+2. Remaining over-cost is mostly inherent to line coverage: a broadly executed line pulls in
+   `test_execute_tpcds` (21.5 s). Ideas tried and dropped this session: narrowing `setUpClass`
+   fixture data (TestExecutor's tpch/tpcds paths share `subtestHelper`, so static analysis
+   keeps tpcds anyway). The four "1,020 dialect tests fail" holdout cases look cheap in the
+   oracle only because pytest stops after a collection error; do not chase them.
+3. CPU left (~0.5 s on the sample) is mostly `ast.parse` of the patched files and JSON load.
 4. **Freeze well before Sun 10:00 AM CT.** Never swap a graded, working commit for an untested change
    near the cutoff.
 
 ## Environment notes (for whoever continues)
 
 - The Claude cloud workspace had Python 3.13, uv, and Docker (start the daemon with `dockerd &`).
+  Two serial `ground_truth.py` runs in parallel on its 2 cores label ~1 patch/75 s overall.
   The pinned sqlglot + venv were set up there with `uv venv -p 3.13` and `requirements.lock`.
 - The shell on the Windows PC (Claude's device VM) has Python 3.10 and no Docker; use it only for git.
   Writes into `.git` from remote tools are blocked; git needs delete permission in the folder for its
@@ -153,6 +190,7 @@ python tools/evaluate.py sample sample/answers.json out.jsonl          # per-com
 # holdout (all 100 patches; 96 labelled)
 mkdir -p /tmp/h && cp sample/tests.json /tmp/h && cp -r benchmarks/holdout/commits /tmp/h/
 RWX_DATA=/tmp/h python selector.py > h.jsonl && python tools/eval_holdout.py /tmp/h h.jsonl benchmarks/holdout/labels.json
+# targeted holdout (v4 rules): see benchmarks/targeted/README.md; generator: tools/target_mutants.py
 # new holdout patches + labels (≈80–150 s each, serial, Python 3.13 + requirements.lock)
 python tools/make_mutants.py <sqlglot-checkout> <dir> <count> <seed>
 GT_WORKERS=1 GT_TIMEOUT=900 python tools/ground_truth.py <sqlglot-checkout> sample/tests.json labels.json <dir>/*.patch
