@@ -1783,6 +1783,163 @@ def _improve(buckets, loads, ms, rounds=50):
     return buckets, loads
 
 
+# ===================================================================== verify
+T0 = __import__("time").monotonic()
+VERIFY_ALL = os.environ.get("RWX_VERIFY_ALL") == "1"   # validation: verify every eligible commit
+VERIFY_DUMP = os.environ.get("RWX_VERIFY_DUMP")        # validation: write observed passes here
+VERIFY_OVERHEAD_S = 0.15   # fork + fresh sqlglot/test-module imports, per commit
+VERIFY_CLASS_SETUP_S = {"tests/test_executor.py": 1.5}  # setUpClass work not in catalog seconds
+VERIFY_CPU_SCALE = 2.2     # scorer CPU vs the machine the estimates were measured on
+                           # (v3: 1.00 s here, 2.49 s on the board; v4: 0.387 s vs 0.92 s)
+VERIFY_REEXEC_FRAC = 0.5   # share of a proxied test's saving that re-execution may spend
+VERIFY_GAIN_FRAC = 0.7     # run only when estimated CPU <= this share of the cost it can save
+VERIFY_WALL_S = float(os.environ.get("RWX_VERIFY_WALL", "100"))
+
+
+def _cost_ms(ids, lookup) -> int:
+    w = schedule(ids, lookup)
+    if not w:
+        return 0
+    return max(sum(_dur(lookup, n) for n in b) for b in w) + WORKER_COST_MS * len(w)
+
+
+REPLAY_EST_S = {"tpcds_execute": 3.0, "tpch_execute": 0.3, "tpch_optimized": 0.2}  # child CPU, measured
+
+
+def _replay_cov():
+    try:
+        with gzip.open(INDEX_DIR / "replay_cov.json.gz", "rt", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def replay_eligible(select, files, proxied_ids, lookup, cov) -> dict:
+    """Proxied tests whose outcome the replay decides for this patch, mapped
+    to the query positions that must be re-executed for real.  Requires that
+    every change is a statement inside a function body of a sqlglot module,
+    that none of it runs at import time, and that none of it is executed by
+    the test's shared phase 2 (class fixtures) on the pinned tree."""
+    if not proxied_ids or cov is None or select is None:
+        return {}
+    spans = []
+    src = select.index.sources()
+    for fd in files:
+        rel = fd.old
+        if not rel.startswith("sqlglot/"):
+            return {}
+        base = src.get(rel)
+        if base is None:
+            return {}
+        try:
+            new_src = apply_hunks(base, fd.hunks)
+            changes = diff_module(base, new_src, fd.hunks)
+        except (ValueError, SyntaxError):
+            return {}
+        for ch in changes:
+            if ch.kind != "function":
+                return {}
+            for a, b in ch.lines:
+                _, imods = select.index.line_tests(rel, a, b)
+                if imods:
+                    return {}
+                spans.append((rel, a, b))
+
+    def hit(lines):
+        return any(any(a <= ln <= b for ln in lines.get(rel, ())) for rel, a, b in spans)
+
+    out = {}
+    for n in proxied_ids:
+        c = cov.get(lookup[n]["id"])
+        if c is None or hit(c["shared"]):
+            continue
+        out[n] = sorted(int(q) for q, lines in c["per"].items() if hit(lines))
+    return out
+
+
+def verify(chosen, lookup, select=None):
+    """Drop candidate tests that a forked child observed passing on the
+    patched tree, or whose outcome an exact phase-1 replay proves unchanged."""
+    sys.path.insert(0, str(HERE))
+    import runner
+    if not runner.available():
+        return chosen
+    import replay
+    proxy_kind = {}
+    for n, t in lookup.items():
+        k = replay.PROXIES.get(t["id"])
+        if k:
+            proxy_kind[n] = k
+    cov = None
+    jobs = []
+    for i, (stem, ids, text) in enumerate(chosen):
+        if not ids:
+            continue
+        try:
+            files = parse_patch(text)
+        except ValueError:
+            continue
+        patched = runner.patched_sources(files, apply_hunks)
+        if patched is None:
+            continue
+        proxied = {n for n in ids if n in proxy_kind}
+        elig = {}
+        if proxied:
+            if cov is None:
+                cov = _replay_cov() or {}
+            elig = replay_eligible(select, files, proxied, lookup, cov)
+        base_ms = _cost_ms(ids, lookup)
+        replays = []
+        keep = ids
+        if elig:
+            rest = ids - set(elig)
+            save_s = (base_ms - _cost_ms(rest, lookup)) / 1000
+            r_est = sum(REPLAY_EST_S[proxy_kind[n]] for n in elig) * VERIFY_CPU_SCALE
+            if VERIFY_ALL or r_est <= VERIFY_GAIN_FRAC * save_s:
+                secs_of = {n: cov[lookup[n]["id"]]["secs"] for n in elig}
+                max_s = 600.0 if VERIFY_ALL else VERIFY_REEXEC_FRAC * save_s / VERIFY_CPU_SCALE
+                replays = []
+                for n in sorted(elig):
+                    forced = elig[n]
+                    if forced and 1.5 + sum(secs_of[n].get(str(q), 1.0) for q in forced) > max_s:
+                        continue  # re-executing what the change reaches costs more than it saves
+                    replays.append((n, proxy_kind[n], forced, secs_of[n], max_s))
+                keep = ids - {r[0] for r in replays}
+        r_tests = keep - proxied
+        run_s = sum(lookup[n]["seconds"] for n in r_tests)
+        files_c = {lookup[n]["file"] for n in r_tests}
+        est = (VERIFY_OVERHEAD_S + run_s + sum(VERIFY_CLASS_SETUP_S.get(f, 0) for f in files_c)) * VERIFY_CPU_SCALE
+        save = (_cost_ms(keep, lookup) - _cost_ms(keep - r_tests, lookup)) / 1000
+        if VERIFY_ALL:
+            if run_s > float(os.environ.get("RWX_VERIFY_MAXS", "1e9")):
+                r_tests = set()
+        elif not r_tests or est > VERIFY_GAIN_FRAC * save:
+            r_tests = set()
+        if not r_tests and not replays:
+            continue
+        tests = sorted((lookup[n] for n in r_tests), key=lambda t: t["number"])
+        rp = replays
+        budget = 600.0 if VERIFY_ALL else 4.0 + 3.0 * (run_s + sum(REPLAY_EST_S[r[1]] + r[4] for r in rp))
+        jobs.append((i, tests, patched, budget, rp))
+    if not jobs:
+        return chosen
+    # cheapest first, so a slow machine still verifies the most commits
+    jobs.sort(key=lambda j: sum(t["seconds"] for t in j[1]) + sum(REPLAY_EST_S[r[1]] for r in j[4]))
+    deadline = None if VERIFY_ALL else T0 + VERIFY_WALL_S
+    passed = runner.run_jobs(jobs, parallel=int(os.environ.get("RWX_VERIFY_PAR", "2")), deadline=deadline)
+    if VERIFY_DUMP:
+        with open(VERIFY_DUMP, "w") as fh:
+            json.dump({chosen[i][0]: {"passed": sorted(p), "kept": runner.run_jobs.kept.get(i),
+                                    "cpu": runner.run_jobs.cpu.get(i)}
+                       for i, p in passed.items()}, fh)
+    out = list(chosen)
+    for i, p in passed.items():
+        stem, ids, text = out[i]
+        out[i] = (stem, ids - p, text)
+        log("verify", stem, len(ids), "->", len(ids - p))
+    return out
+
+
 # ===================================================================== main
 def main() -> None:
     tests = json.loads((DATA / "tests.json").read_text(encoding="utf-8"))["tests"]
@@ -1795,17 +1952,25 @@ def main() -> None:
         select = None
     all_ids = {t["number"] for t in tests}
     lookup = {t["number"]: t for t in tests}
+    chosen = []
     for patch in patches:
         reasons: list = []
+        text = ""
         try:
             text = patch.read_bytes().decode("utf-8", errors="replace")
             ids = select.for_patch(text, reasons) if select else set(all_ids)
         except Exception as e:
             reasons.append(f"fatal:{e}")
             ids = set(all_ids)
-        workers = schedule(ids, lookup)
         log(patch.stem, len(ids), reasons)
-        out_lines.append(json.dumps({"commit": patch.stem, "workers": workers}, separators=(",", ":")))
+        chosen.append((patch.stem, ids, text))
+    try:
+        chosen = verify(chosen, lookup, select)
+    except Exception as e:  # verification is an optimisation only
+        print(f"verify failed: {e}", file=sys.stderr)
+    for stem, ids, _ in chosen:
+        workers = schedule(ids, lookup)
+        out_lines.append(json.dumps({"commit": stem, "workers": workers}, separators=(",", ":")))
     sys.stdout.write("\n".join(out_lines) + ("\n" if out_lines else ""))
     sys.stdout.flush()
 

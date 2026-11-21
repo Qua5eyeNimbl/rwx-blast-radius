@@ -248,3 +248,32 @@ make sample
 - Holdout: 4 of the 60 batch-1 patches have no usable label (as before).
 - CPU is measured inside the container with `getrusage`; the board measured ~2.5 s vs ~1.8 s locally.
 - `index/source.json.gz` packages sqlglot's MIT source (license in `index/SQLGLOT_LICENSE`).
+
+## v5 (Sat Nov 21 ~2:30 AM CT) — in-container verification + TPC replay (NOT submitted)
+
+Track rules allow it: "running sqlglot's tests while you decide is allowed and charged here".
+- `runner.py` (T1): forked child per commit, patched modules served from memory over the pinned
+  tree in `/app/sq` (fetched at build by `build/fetch_sqlglot.py`, verified against
+  `index/source.json.gz`), candidate tests run with unittest; only tests seen PASSING are dropped.
+  Process pools run inline (pickle round trip); subprocess/process start or reading a patched
+  file taints (sticky); RSS watchdog 1.5 GB; wall cap 100 s.
+- `replay.py` (T2): TPC-DS/TPC-H executor tests. Replays parse/pickle/optimize/Plan + DuckDB
+  transpile and compares structural digests with pinned ones (built in Docker, `PYTHONHASHSEED=0`
+  is required: one TPC-DS plan depends on set order). Queries whose plan differs, or whose
+  pinned phase-2 coverage (`index/replay_cov.json.gz`, `tools/build_replay_cov.py`) hits a changed
+  line, are re-executed with the test's own code; early exit over budget. Only for
+  function-body changes not executed at import.
+- Parity (verify-all mode, every eligible commit): sample 13, holdout 56, targeted 56 commits,
+  **0 violations** (no labelled-failing test ever reported passing).
+- Production image, organizer flags, local: sample 103.165 s + 2.62 s CPU, 0 misses (v4: 112.359
+  + 0.39); holdout 669.4 s, 0 misses, CPU 22; targeted 470.3 s, 0 misses, CPU 9.4.
+- CPU calibration: board ≈ 2.4× this PC (v3 1.00 s here / 2.49 board; v4 0.387 / 0.92), so the
+  realistic board gain is only ~4 s on sample-like commits. Policy constants in `selector.py`.
+
+### Next (biggest remaining lever, half-built)
+Import-time changes (DuckDB etc. parse SQL at import) make the selector add every transitive
+user (1,100–1,600 tests incl. test_max_nodes 28.8 s): ~120 s of holdout waste in 5 commits.
+Plan: in the child, import all sqlglot modules in sorted order with the patch: raises → select
+core ∪ collectors ∪ requirers only; state digest equal → drop the import-time part; else keep.
+`replay.import_states` exists but is NOT deterministic yet (dialect/typing modules differ run to
+run even with seed 0 — find the id/order-dependent attribute) and is not wired in.

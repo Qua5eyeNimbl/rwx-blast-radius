@@ -1,0 +1,6 @@
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+COPY requirements.lock /app/requirements.lock
+RUN pip install --no-cache-dir -q -r /app/requirements.lock
+COPY index/source.json.gz /app/index/source.json.gz
+COPY build/fetch_sqlglot.py /app/build/fetch_sqlglot.py
+RUN python /app/build/fetch_sqlglot.py /app/sq /app/index/source.json.gz && python -m compileall -q /app/sq/sqlglot /app/sq/tests
